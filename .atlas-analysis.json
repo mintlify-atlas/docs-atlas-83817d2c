@@ -1,0 +1,115 @@
+{
+  "projectType": "saas",
+  "projectName": "llms.txt Generator",
+  "projectDescription": "Automated web service that generates and maintains llms.txt files for websites with real-time crawling and scheduled updates",
+  "theme": "palm",
+  "primaryColor": "#3b82f6",
+  "lightColor": "#60a5fa",
+  "darkColor": "#2563eb",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/intelligent-crawling",
+              "features/real-time-streaming",
+              "features/llm-enhancement",
+              "features/auto-updates"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/web-interface",
+              "guides/api-usage",
+              "guides/configuration",
+              "guides/llmstxt-spec"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/overview",
+              "deployment/prerequisites",
+              "deployment/aws-setup",
+              "deployment/database-storage",
+              "deployment/terraform",
+              "deployment/docker-ecs",
+              "deployment/frontend",
+              "deployment/monitoring"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/websocket",
+              "api/authentication",
+              "api/cron-triggers",
+              "api/webhooks"
+            ]
+          },
+          {
+            "group": "Backend Modules",
+            "pages": [
+              "api/crawler",
+              "api/formatter",
+              "api/storage",
+              "api/database"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Architecture",
+        "groups": [
+          {
+            "group": "System Design",
+            "pages": [
+              "architecture/overview",
+              "architecture/tech-stack",
+              "architecture/infrastructure",
+              "architecture/data-flow"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Intelligent BFS web crawling with configurable depth and page limits",
+    "Real-time WebSocket streaming for live crawl progress and logs",
+    "Playwright-based JavaScript rendering via Brightdata proxy integration",
+    "AI-powered content optimization using LLM enhancement (Grok 4.1-Fast)",
+    "Automated scheduled recrawls via AWS Lambda and EventBridge",
+    "Persistent storage with Cloudflare R2 and Supabase PostgreSQL",
+    "Production-ready AWS ECS Fargate deployment with auto-scaling",
+    "API key authentication and CORS protection for security"
+  ],
+  "publicApiSurface": [
+    "WebSocket /ws/crawl - Real-time crawling endpoint with authentication",
+    "POST /auth/token - Generate JWT token for WebSocket authentication",
+    "POST /internal/cron/recrawl - Trigger scheduled site recrawls",
+    "POST /internal/hooks/site-changed - Webhook for manual site update triggers",
+    "GET /health - Health check endpoint",
+    "LLMCrawler class - Core web crawler with BFS traversal and JS support",
+    "format_llms_txt() - Format crawled pages into llms.txt specification",
+    "save_llms_txt() - Upload generated files to R2 storage",
+    "save_site_metadata() - Track crawled sites in Supabase database",
+    "recrawl_due_sites() - Automated recrawl scheduling function"
+  ]
+}

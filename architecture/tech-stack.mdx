@@ -1,0 +1,351 @@
+---
+title: 'Technology Stack'
+description: 'Comprehensive breakdown of technologies used in the llms.txt Generator'
+icon: 'layer-group'
+---
+
+## Overview
+
+The llms.txt Generator is built with modern, production-ready technologies optimized for performance, scalability, and developer experience.
+
+## Backend Stack
+
+### Core Framework
+
+<CardGroup cols={2}>
+  <Card title="FastAPI" icon="bolt">
+    **Version**: 0.122+
+    
+    - Asynchronous Python web framework
+    - Built-in WebSocket support
+    - Automatic API documentation (OpenAPI/Swagger)
+    - High performance with async/await
+    - Type hints with Pydantic validation
+  </Card>
+
+  <Card title="Python" icon="python">
+    **Version**: 3.11+
+    
+    - Modern async/await syntax
+    - Excellent library ecosystem
+    - Strong type hinting support
+    - Performance improvements in 3.11+
+  </Card>
+</CardGroup>
+
+### Web Crawling & Scraping
+
+<CardGroup cols={2}>
+  <Card title="Playwright" icon="browser">
+    - Headless browser automation
+    - Chromium engine for JavaScript execution
+    - Full page rendering support
+    - Network request interception
+    - Screenshot capabilities
+  </Card>
+
+  <Card title="BeautifulSoup4" icon="code">
+    - HTML/XML parsing
+    - DOM traversal and manipulation
+    - Content extraction
+    - Robust error handling
+  </Card>
+
+  <Card title="Brightdata" icon="network-wired">
+    - Proxy service for JS-heavy sites
+    - Scraping Browser API
+    - Bypass anti-bot protections
+    - Global proxy network
+  </Card>
+
+  <Card title="httpx" icon="globe">
+    - Async HTTP client
+    - HTTP/2 support
+    - Connection pooling
+    - Automatic redirects
+  </Card>
+</CardGroup>
+
+### LLM Integration (Optional)
+
+<CardGroup cols={2}>
+  <Card title="OpenRouter" icon="brain">
+    - LLM API aggregator
+    - Access to multiple models (Grok, GPT, Claude, etc.)
+    - Content enhancement and optimization
+    - Fallback model support
+  </Card>
+
+  <Card title="Grok 4.1-Fast" icon="sparkles">
+    - Default enhancement model
+    - Fast response times
+    - Content summarization
+    - Structured output generation
+  </Card>
+</CardGroup>
+
+### Data Validation & Processing
+
+```python
+# Key libraries
+from pydantic import BaseModel, HttpUrl, Field
+from dataclasses import dataclass
+import hashlib  # Content hashing for change detection
+import asyncio  # Async/await concurrency
+```
+
+<AccordionGroup>
+  <Accordion title="Pydantic Models Example">
+    ```python
+    from pydantic import BaseModel, HttpUrl
+
+    class CrawlRequest(BaseModel):
+        url: HttpUrl
+        maxPages: int = 50
+        descLength: int = 500
+        enableAutoUpdate: bool = False
+        recrawlIntervalMinutes: int = 360
+        llmEnhance: bool = False
+        useBrightdata: bool = False
+    ```
+  </Accordion>
+
+  <Accordion title="PageInfo Dataclass">
+    ```python
+    from dataclasses import dataclass
+
+    @dataclass
+    class PageInfo:
+        url: str
+        title: str
+        description: str
+        snippet: str
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Frontend Stack
+
+### Core Framework
+
+<CardGroup cols={2}>
+  <Card title="Next.js" icon="react">
+    **Version**: 15+
+    
+    - React framework for production
+    - App Router architecture
+    - Server and client components
+    - Built-in optimization
+    - API routes (used for proxying)
+  </Card>
+
+  <Card title="TypeScript" icon="code">
+    **Version**: 5+
+    
+    - Type safety across the application
+    - Enhanced IDE support
+    - Reduced runtime errors
+    - Better refactoring experience
+  </Card>
+</CardGroup>
+
+### UI & Styling
+
+<CardGroup cols={2}>
+  <Card title="Tailwind CSS" icon="palette">
+    - Utility-first CSS framework
+    - Responsive design system
+    - Custom theme configuration
+    - Dark mode support
+    - Optimized production builds
+  </Card>
+
+  <Card title="shadcn/ui" icon="layer-group">
+    - Re-usable component library
+    - Accessible components
+    - Customizable design tokens
+    - Copy-paste component architecture
+  </Card>
+</CardGroup>
+
+### Real-time Communication
+
+```typescript
+// WebSocket client implementation
+const ws = new WebSocket(`${WS_URL}?api_key=${API_KEY}`);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify(crawlRequest));
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  // Handle: log, result, url, error types
+};
+```
+
+<Info>
+  The frontend uses native WebSocket API for bidirectional, real-time communication with the backend.
+</Info>
+
+## Infrastructure Stack
+
+### AWS Services
+
+<CardGroup cols={2}>
+  <Card title="ECS Fargate" icon="docker">
+    - Serverless container orchestration
+    - Auto-scaling task management
+    - No EC2 instance management
+    - Pay-per-use pricing
+  </Card>
+
+  <Card title="ECR" icon="box">
+    - Docker image registry
+    - Vulnerability scanning
+    - Image lifecycle policies
+    - IAM-based access control
+  </Card>
+
+  <Card title="Application Load Balancer" icon="scale-balanced">
+    - HTTP/HTTPS traffic distribution
+    - WebSocket support
+    - Health checks
+    - SSL/TLS termination
+  </Card>
+
+  <Card title="Lambda" icon="function">
+    - Scheduled recrawl execution
+    - Event-driven architecture
+    - 10-minute timeout (600s)
+    - 512MB memory allocation
+  </Card>
+
+  <Card title="EventBridge" icon="clock">
+    - Cron-based scheduling
+    - Every 6 hours trigger
+    - Event-driven invocation
+    - CloudWatch integration
+  </Card>
+
+  <Card title="CloudWatch" icon="chart-line">
+    - Centralized logging
+    - Metrics and alarms
+    - 14-day log retention
+    - Real-time monitoring
+  </Card>
+</CardGroup>
+
+### External Services
+
+<CardGroup cols={2}>
+  <Card title="Supabase" icon="database">
+    **PostgreSQL Database**
+    
+    - Managed PostgreSQL
+    - RESTful API
+    - Real-time subscriptions
+    - Row-level security
+    - Auto-generated API
+  </Card>
+
+  <Card title="Cloudflare R2" icon="cloud">
+    **Object Storage**
+    
+    - S3-compatible API
+    - Global CDN delivery
+    - Zero egress fees
+    - Public domain URLs
+    - High availability
+  </Card>
+
+  <Card title="Vercel" icon="triangle">
+    **Frontend Hosting**
+    
+    - Next.js optimized platform
+    - Edge network deployment
+    - Automatic HTTPS
+    - Preview deployments
+    - Built-in analytics
+  </Card>
+
+  <Card title="Terraform" icon="infinity">
+    **Infrastructure as Code**
+    
+    - Declarative configuration
+    - Version control for infra
+    - Reproducible deployments
+    - State management
+    - AWS provider v5.0+
+  </Card>
+</CardGroup>
+
+## Development Tools
+
+### Testing
+
+```bash
+# Backend testing
+pytest -v                    # Unit tests
+pytest --cov=backend        # Coverage reports
+
+# Frontend testing
+npm run test                # Jest + React Testing Library
+npm run test:e2e           # Playwright E2E tests
+```
+
+### Code Quality
+
+<CardGroup cols={2}>
+  <Card title="Backend">
+    - **Black**: Code formatting
+    - **Ruff**: Fast linting
+    - **mypy**: Static type checking
+    - **pytest**: Testing framework
+  </Card>
+
+  <Card title="Frontend">
+    - **ESLint**: Code linting
+    - **Prettier**: Code formatting
+    - **TypeScript**: Type checking
+    - **Jest**: Unit testing
+  </Card>
+</CardGroup>
+
+### Containerization
+
+```dockerfile
+# Multi-stage Docker build for backend
+FROM python:3.11-slim as builder
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+FROM python:3.11-slim
+RUN playwright install chromium
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+## Version Requirements
+
+| Component | Minimum Version | Recommended |
+|-----------|----------------|-------------|
+| Python | 3.11 | 3.11+ |
+| Node.js | 20.0 | 20.x LTS |
+| Terraform | 1.0 | Latest 1.x |
+| Docker | 20.0 | Latest |
+| AWS CLI | 2.0 | Latest 2.x |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Infrastructure Details" icon="aws" href="/architecture/infrastructure">
+    Deep dive into AWS infrastructure components and configuration
+  </Card>
+
+  <Card title="Data Flow" icon="diagram-project" href="/architecture/data-flow">
+    Understand how data flows through the system
+  </Card>
+</CardGroup>

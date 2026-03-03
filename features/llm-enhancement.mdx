@@ -1,0 +1,473 @@
+---
+title: 'LLM Enhancement'
+description: 'AI-powered content optimization using Grok for improved clarity and structure'
+icon: 'sparkles'
+---
+
+## Overview
+
+The llms.txt Generator includes an optional LLM enhancement feature that uses Grok 4.1-Fast (via OpenRouter) to improve the quality, clarity, and structure of generated content. This AI-powered optimization makes the output more useful for LLM consumption while preserving all original URLs and information.
+
+<Note>
+  LLM enhancement is **optional** and requires an OpenRouter API key. The original content is always returned if enhancement fails or is disabled.
+</Note>
+
+## How It Works
+
+<Steps>
+  <Step title="Initial Crawl">
+    The crawler extracts raw content from the website:
+
+    ```python backend/main.py
+    crawler = LLMCrawler(url, max_pages, desc_length, log)
+    pages = await crawler.run()
+    llms_txt = format_llms_txt(url, pages, md_url_map)
+    ```
+  </Step>
+
+  <Step title="Enhancement Request">
+    If enabled, the content is sent to the LLM processor:
+
+    ```python backend/main.py
+    llm_enhance = payload.get('llmEnhance', False)
+    if llm_enhance and settings.llm_enhancement_enabled:
+        try:
+            await log("Enhancing with LLM...")
+            from llm_processor import LLMProcessor
+            processor = LLMProcessor(log)
+            result = await processor.process(llms_txt)
+
+            if result.success:
+                llms_txt = result.output
+                await log(f"LLM enhancement: {result.stats}")
+            else:
+                await log(f"LLM enhancement failed, using original: {result.error}")
+        except Exception as e:
+            await log(f"LLM enhancement error: {e}")
+    ```
+  </Step>
+
+  <Step title="Validation">
+    The enhanced content is validated to ensure quality:
+
+    ```python backend/llm_processor/processor.py
+    # Extract URLs from original
+    original_urls = extract_urls(llms_txt)
+    await self.log(f"Extracted {len(original_urls)} URLs from original content")
+
+    # Call OpenRouter API
+    messages = build_messages(llms_txt)
+    enhanced_content = await client.complete(messages)
+
+    # Validate output preserves URLs
+    is_valid, errors = validate_llms_txt(enhanced_content, original_urls)
+
+    if not is_valid:
+        error_msg = f"Validation failed: {'; '.join(errors[:3])}"
+        return ProcessingResult.failure_result(llms_txt, error_msg)
+    ```
+  </Step>
+
+  <Step title="Fallback on Failure">
+    If enhancement fails, the original content is used:
+
+    ```python backend/llm_processor/processor.py
+    except RateLimitError as e:
+        return ProcessingResult.failure_result(
+            llms_txt, 
+            f"Rate limit exceeded: {str(e)}"
+        )
+    except Exception as e:
+        error_msg = f"LLM processing error: {str(e)}"
+        await self.log(error_msg)
+        return ProcessingResult.failure_result(llms_txt, error_msg)
+    ```
+  </Step>
+</Steps>
+
+## What Gets Enhanced?
+
+The LLM optimization focuses on:
+
+<CardGroup cols={2}>
+  <Card title="Clarity" icon="lightbulb">
+    - Rewrites awkward or unclear descriptions
+    - Removes boilerplate and redundant text
+    - Improves grammar and readability
+  </Card>
+  <Card title="Structure" icon="list-tree">
+    - Organizes content into logical sections
+    - Adds hierarchy where appropriate
+    - Groups related pages together
+  </Card>
+  <Card title="Completeness" icon="circle-check">
+    - Fills in missing context
+    - Expands terse descriptions
+    - Adds relevant details
+  </Card>
+  <Card title="Consistency" icon="arrows-rotate">
+    - Standardizes formatting
+    - Unifies tone and style
+    - Normalizes terminology
+  </Card>
+</CardGroup>
+
+<Warning>
+  The LLM **must preserve all URLs** from the original content. Any output that modifies, removes, or adds URLs is rejected and the original is used instead.
+</Warning>
+
+## Validation & Safety
+
+Strict validation ensures the enhanced content meets quality standards:
+
+```python backend/llm_processor/validator.py
+def validate_llms_txt(content: str, original_urls: list[str]) -> tuple[bool, list[str]]:
+    errors = []
+    
+    # Extract URLs from enhanced content
+    enhanced_urls = extract_urls(content)
+    
+    # Check that all original URLs are preserved
+    missing_urls = set(original_urls) - set(enhanced_urls)
+    if missing_urls:
+        errors.append(f"Missing {len(missing_urls)} URLs from original")
+    
+    # Check for unexpected new URLs
+    extra_urls = set(enhanced_urls) - set(original_urls)
+    if extra_urls:
+        errors.append(f"Added {len(extra_urls)} URLs not in original")
+    
+    # Ensure content is not empty
+    if not content.strip():
+        errors.append("Enhanced content is empty")
+    
+    # Ensure reasonable length
+    if len(content) < 100:
+        errors.append("Enhanced content too short")
+    
+    return (len(errors) == 0, errors)
+```
+
+### Description Truncation
+
+To prevent excessively long outputs, descriptions are intelligently truncated:
+
+```python backend/llm_processor/validator.py
+def truncate_descriptions(content: str, max_length: int = 800) -> str:
+    """
+    Truncate blockquote descriptions that exceed max_length.
+    Truncates at sentence boundaries for clean cuts.
+    """
+    lines = content.split('\n')
+    result = []
+    
+    in_blockquote = False
+    blockquote_buffer = []
+    
+    for line in lines:
+        if line.startswith('>'):
+            in_blockquote = True
+            blockquote_buffer.append(line)
+        else:
+            if in_blockquote:
+                # End of blockquote - process buffer
+                full_text = '\n'.join(blockquote_buffer)
+                if len(full_text) > max_length:
+                    # Truncate at sentence boundary
+                    truncated = full_text[:max_length]
+                    last_period = truncated.rfind('.')
+                    if last_period > max_length * 0.7:
+                        truncated = truncated[:last_period + 1]
+                    result.append(truncated + '...')
+                else:
+                    result.extend(blockquote_buffer)
+                blockquote_buffer = []
+                in_blockquote = False
+            result.append(line)
+    
+    return '\n'.join(result)
+```
+
+## Configuration
+
+LLM enhancement is configured via environment variables:
+
+```bash backend/.env
+# Enable LLM enhancement feature
+LLM_ENHANCEMENT_ENABLED=true
+
+# OpenRouter API key (required if enabled)
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Model selection
+OPENROUTER_MODEL=x-ai/grok-2-1212
+
+# Timeout and retries
+LLM_TIMEOUT_SECONDS=60
+LLM_MAX_RETRIES=2
+
+# Temperature (0.0 = deterministic, 1.0 = creative)
+LLM_TEMPERATURE=0.3
+```
+
+<ParamField path="LLM_ENHANCEMENT_ENABLED" type="boolean" default="false">
+  Master toggle for LLM enhancement feature
+</ParamField>
+
+<ParamField path="OPENROUTER_API_KEY" type="string" required>
+  Your OpenRouter API key from [openrouter.ai](https://openrouter.ai)
+</ParamField>
+
+<ParamField path="OPENROUTER_MODEL" type="string" default="x-ai/grok-2-1212">
+  Model to use for enhancement. Options:
+  - `x-ai/grok-2-1212` - Grok 4.1-Fast (recommended, fast and high-quality)
+  - `anthropic/claude-3.5-sonnet` - Claude 3.5 Sonnet (excellent quality, slower)
+  - `openai/gpt-4o` - GPT-4 Omni (good quality, moderate speed)
+</ParamField>
+
+<ParamField path="LLM_TIMEOUT_SECONDS" type="integer" default="60">
+  Maximum time to wait for LLM response
+</ParamField>
+
+<ParamField path="LLM_MAX_RETRIES" type="integer" default="2">
+  Number of retries on rate limit or timeout
+</ParamField>
+
+<ParamField path="LLM_TEMPERATURE" type="float" default="0.3">
+  Sampling temperature (0.0-1.0). Lower = more deterministic, higher = more creative
+</ParamField>
+
+## API Usage
+
+Enable enhancement via WebSocket request:
+
+<CodeGroup>
+```javascript WebSocket
+const ws = new WebSocket('wss://api.llmstxt.cloud/ws/crawl?token=YOUR_TOKEN');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    url: 'https://example.com',
+    maxPages: 50,
+    descLength: 500,
+    llmEnhance: true  // Enable LLM enhancement
+  }));
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  
+  if (message.type === 'log') {
+    console.log(message.content);
+    // "Enhancing with LLM..."
+    // "Calling OpenRouter API with model x-ai/grok-2-1212..."
+    // "Enhancement successful in 3.42s"
+  }
+};
+```
+
+```python Python
+import asyncio
+import websockets
+import json
+
+async def crawl_with_enhancement():
+    uri = "wss://api.llmstxt.cloud/ws/crawl?token=YOUR_TOKEN"
+    
+    async with websockets.connect(uri) as ws:
+        await ws.send(json.dumps({
+            "url": "https://example.com",
+            "maxPages": 50,
+            "descLength": 500,
+            "llmEnhance": True  # Enable enhancement
+        }))
+        
+        async for message in ws:
+            data = json.loads(message)
+            print(f"[{data['type']}] {data.get('content', '')}")
+
+asyncio.run(crawl_with_enhancement())
+```
+</CodeGroup>
+
+## Processing Results
+
+The processor returns detailed statistics:
+
+```python backend/llm_processor/models.py
+@dataclass
+class ProcessingResult:
+    success: bool
+    output: str
+    error: str | None = None
+    stats: dict | None = None
+
+    @classmethod
+    def success_result(cls, output: str, stats: dict) -> "ProcessingResult":
+        return cls(success=True, output=output, error=None, stats=stats)
+
+    @classmethod
+    def failure_result(cls, original_output: str, error: str) -> "ProcessingResult":
+        return cls(success=False, output=original_output, error=error, stats=None)
+```
+
+**Success statistics:**
+```python
+{
+    "model": "x-ai/grok-2-1212",
+    "time_seconds": 3.42,
+    "original_length": 12543,
+    "enhanced_length": 14221,
+    "url_count": 47
+}
+```
+
+**Failure result:**
+```python
+ProcessingResult(
+    success=False,
+    output="<original content>",
+    error="Rate limit exceeded: 429 Too Many Requests",
+    stats=None
+)
+```
+
+## Example Enhancement
+
+**Before (Raw Crawl):**
+```markdown
+# Acme Corp
+
+## Home
+
+https://acme.com
+
+> Home page Acme Corp leading provider solutions
+
+## Products
+
+https://acme.com/products
+
+> Our products page products we offer
+
+## About
+
+https://acme.com/about
+
+> About page learn more
+```
+
+**After (LLM Enhanced):**
+```markdown
+# Acme Corp Documentation
+
+Comprehensive documentation for Acme Corp's products and services.
+
+## Getting Started
+
+### Homepage
+
+https://acme.com
+
+> Acme Corp is a leading provider of enterprise software solutions, specializing in cloud infrastructure and developer tools. The homepage provides an overview of the company's mission, key products, and customer success stories.
+
+## Products & Services
+
+### Product Catalog
+
+https://acme.com/products
+
+> Browse Acme Corp's complete product portfolio, including cloud hosting, database solutions, and CI/CD platforms. Each product page includes pricing, features, and integration guides.
+
+## Company Information
+
+### About Us
+
+https://acme.com/about
+
+> Learn about Acme Corp's history, team, and values. Founded in 2015, the company has grown to serve over 10,000 customers worldwide with a focus on developer experience and reliability.
+```
+
+<Info>
+  Notice how the enhanced version adds context, organizes sections, improves descriptions, and maintains all original URLs.
+</Info>
+
+## Cost Considerations
+
+LLM enhancement incurs API costs via OpenRouter:
+
+<CardGroup cols={2}>
+  <Card title="Grok 4.1-Fast" icon="bolt">
+    **Cost**: ~$0.02-0.05 per crawl
+    **Speed**: 2-4 seconds
+    **Quality**: Excellent
+  </Card>
+  <Card title="Claude 3.5 Sonnet" icon="brain">
+    **Cost**: ~$0.10-0.20 per crawl
+    **Speed**: 5-10 seconds
+    **Quality**: Outstanding
+  </Card>
+</CardGroup>
+
+<Note>
+  Costs vary based on input size. A typical 50-page crawl generates ~5-10k tokens of input.
+</Note>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Enable only when quality matters">
+    Use enhancement for public-facing documentation or important sites where description quality is critical. Skip it for internal tools or quick tests.
+  </Accordion>
+
+  <Accordion title="Monitor API usage">
+    Track OpenRouter usage via their dashboard to avoid unexpected costs. Set up billing alerts.
+  </Accordion>
+
+  <Accordion title="Use low temperature">
+    Keep `LLM_TEMPERATURE` at 0.3 or lower for consistent, factual enhancements. Higher values may introduce creativity but risk hallucinations.
+  </Accordion>
+
+  <Accordion title="Review enhanced output">
+    Always review the enhanced content before publishing. While validation prevents URL loss, the LLM may occasionally misinterpret context.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Enhancement always fails">
+    **Check**: `LLM_ENHANCEMENT_ENABLED=true` and valid `OPENROUTER_API_KEY` in `.env`
+    
+    **Verify**: OpenRouter API key has credits and is active
+  </Accordion>
+
+  <Accordion title="Rate limit errors">
+    **Cause**: Too many requests in short time period
+    
+    **Solution**: OpenRouter has rate limits per key. Wait 60 seconds between requests or upgrade your OpenRouter plan.
+  </Accordion>
+
+  <Accordion title="Validation failures">
+    **Cause**: LLM output modified or removed URLs
+    
+    **Solution**: Try a different model. Grok and Claude are very reliable at preserving URLs. GPT-4 occasionally needs more guidance.
+  </Accordion>
+
+  <Accordion title="Timeout errors">
+    **Cause**: LLM took longer than `LLM_TIMEOUT_SECONDS` to respond
+    
+    **Solution**: Increase timeout to 90-120 seconds, or reduce input size by lowering `maxPages`.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Auto Updates" icon="rotate" href="/features/auto-updates">
+    Schedule periodic recrawls with enhancement enabled
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/websocket">
+    Complete WebSocket API documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,447 @@
+---
+title: 'AWS Infrastructure'
+description: 'AWS infrastructure components, configuration, and deployment architecture'
+icon: 'aws'
+---
+
+## Infrastructure Overview
+
+The llms.txt Generator infrastructure is fully defined as code using Terraform and deployed on AWS. The architecture is designed for high availability, scalability, and cost-effectiveness.
+
+## Infrastructure Diagram
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     AWS Cloud                            │
+│                                                          │
+│  ┌────────────────────────────────────────────────┐    │
+│  │            Application Load Balancer            │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │    │
+│  │  │ HTTP:80  │  │HTTPS:443 │  │ WSS      │     │    │
+│  │  └─────┬────┘  └────┬─────┘  └────┬─────┘     │    │
+│  └────────┼────────────┼─────────────┼───────────┘    │
+│           │            │             │                  │
+│           └────────────┴─────────────┘                  │
+│                        │                                │
+│           ┌────────────▼────────────┐                  │
+│           │   Target Group (IP)      │                  │
+│           │   Health: /health        │                  │
+│           └────────────┬─────────────┘                  │
+│                        │                                │
+│           ┌────────────▼────────────┐                  │
+│           │      ECS Cluster         │                  │
+│           │  ┌─────────────────┐    │                  │
+│           │  │  Fargate Task   │    │                  │
+│           │  │  ┌───────────┐  │    │                  │
+│           │  │  │ Container │  │    │                  │
+│           │  │  │ FastAPI   │  │    │                  │
+│           │  │  │ Port:8000 │  │    │                  │
+│           │  │  └───────────┘  │    │                  │
+│           │  │  CPU: 0.5 vCPU  │    │                  │
+│           │  │  RAM: 1 GB      │    │                  │
+│           │  └─────────────────┘    │                  │
+│           └─────────────────────────┘                  │
+│                                                          │
+│  ┌───────────────────────────────────────────────┐    │
+│  │          AWS Lambda Function                   │    │
+│  │  Name: llmstxt-auto-update                    │    │
+│  │  Runtime: Python 3.11                         │    │
+│  │  Timeout: 10 minutes                          │    │
+│  │  Memory: 512 MB                               │    │
+│  └────────────▲──────────────────────────────────┘    │
+│               │                                         │
+│  ┌────────────┴──────────────────────────────────┐    │
+│  │         EventBridge Rule                       │    │
+│  │  Schedule: cron(0 */6 * * ? *)                │    │
+│  │  Trigger: Every 6 hours                        │    │
+│  └────────────────────────────────────────────────┘    │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+
+         ┌──────────────┐      ┌──────────────┐
+         │   Supabase   │      │ Cloudflare R2│
+         │  PostgreSQL  │      │    Storage   │
+         └──────────────┘      └──────────────┘
+              External              External
+```
+
+## Core Components
+
+### 1. ECS Fargate Cluster
+
+<Card title="Container Orchestration" icon="docker">
+  **Purpose**: Runs the FastAPI backend application in Docker containers
+  
+  **Configuration**:
+  - **Launch Type**: Fargate (serverless)
+  - **Task CPU**: 512 units (0.5 vCPU)
+  - **Task Memory**: 1024 MB (1 GB)
+  - **Container Port**: 8000
+  - **Desired Count**: 1 task
+  - **Network Mode**: `awsvpc`
+</Card>
+
+**Key Features**:
+
+- **Container Insights**: Enabled for enhanced monitoring
+- **Auto-scaling**: Can scale based on CPU/memory metrics
+- **Health Checks**: ALB performs health checks on `/health` endpoint
+- **Zero Downtime Deployments**: Rolling updates when new images are pushed
+
+```hcl
+# terraform/ecs.tf excerpt
+resource "aws_ecs_task_definition" "llmstxt_api" {
+  family                   = "llmstxt-api"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+}
+```
+
+### 2. Application Load Balancer (ALB)
+
+<Card title="Load Balancing & SSL Termination" icon="scale-balanced">
+  **Purpose**: Distributes HTTP/HTTPS traffic to ECS tasks
+  
+  **Configuration**:
+  - **Type**: Application Load Balancer
+  - **Scheme**: Internet-facing
+  - **Listeners**: HTTP (80), HTTPS (443)
+  - **Target Type**: IP (required for Fargate)
+  - **Health Check Path**: `/health`
+</Card>
+
+**Listeners**:
+
+<AccordionGroup>
+  <Accordion title="HTTP Listener (Port 80)">
+    - Forwards traffic to target group
+    - Can be configured to redirect to HTTPS
+    - Used for health checks
+  </Accordion>
+
+  <Accordion title="HTTPS Listener (Port 443)">
+    - SSL/TLS termination using ACM certificate
+    - Forwards decrypted traffic to backend
+    - Security Policy: `ELBSecurityPolicy-2016-08`
+    - Supports WebSocket (WSS) connections
+  </Accordion>
+</AccordionGroup>
+
+**Health Check Configuration**:
+
+```hcl
+health_check {
+  enabled             = true
+  healthy_threshold   = 2
+  unhealthy_threshold = 3
+  timeout             = 5
+  interval            = 30
+  path                = "/health"
+  matcher             = "200"
+}
+```
+
+### 3. ECR (Elastic Container Registry)
+
+<Card title="Docker Image Registry" icon="box">
+  **Purpose**: Stores and manages Docker images for the FastAPI backend
+  
+  **Features**:
+  - Image vulnerability scanning on push
+  - Mutable image tags (allows `:latest` updates)
+  - Private repository with IAM-based access
+  - Integrated with ECS for seamless deployments
+</Card>
+
+**Deployment Workflow**:
+
+```bash
+# 1. Build Docker image
+docker build -t llmstxt-api:latest .
+
+# 2. Authenticate with ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin <ECR_URL>
+
+# 3. Tag image
+docker tag llmstxt-api:latest <ECR_URL>/llmstxt-api:latest
+
+# 4. Push to ECR
+docker push <ECR_URL>/llmstxt-api:latest
+
+# 5. Force ECS service update
+aws ecs update-service --cluster llmstxt-cluster \
+  --service llmstxt-api-service --force-new-deployment
+```
+
+### 4. Lambda Function
+
+<Card title="Scheduled Recrawl Executor" icon="function">
+  **Purpose**: Triggers automated recrawls of enrolled sites
+  
+  **Configuration**:
+  - **Runtime**: Python 3.11
+  - **Timeout**: 600 seconds (10 minutes)
+  - **Memory**: 512 MB
+  - **Trigger**: EventBridge cron schedule
+  - **Handler**: `lambda_handler.lambda_handler`
+</Card>
+
+**Environment Variables**:
+
+```python
+API_URL = "https://llmstxt-backend.yourdomain.com"
+CRON_SECRET = "<generated_secret>"
+```
+
+**Execution Flow**:
+
+1. EventBridge triggers Lambda every 6 hours
+2. Lambda sends HTTP POST to `/internal/cron/recrawl`
+3. Backend processes recrawl in background task
+4. Lambda completes quickly, backend handles async work
+
+<Info>
+  The Lambda function deployment package is built using `backend/deployment/build_lambda.sh` and includes all Python dependencies (~70MB).
+</Info>
+
+### 5. EventBridge Rule
+
+<Card title="Cron Scheduler" icon="clock">
+  **Purpose**: Triggers Lambda function on a schedule
+  
+  **Schedule Expression**: `cron(0 */6 * * ? *)`
+  
+  **Frequency**: Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+</Card>
+
+```hcl
+resource "aws_cloudwatch_event_rule" "recrawl_schedule" {
+  name                = "llmstxt-recrawl-schedule"
+  schedule_expression = "cron(0 */6 * * ? *)"
+}
+```
+
+### 6. Security Groups
+
+<CardGroup cols={2}>
+  <Card title="ALB Security Group" icon="shield">
+    **Ingress**:
+    - Port 80 from `0.0.0.0/0`
+    - Port 443 from `0.0.0.0/0`
+    
+    **Egress**:
+    - All traffic to `0.0.0.0/0`
+  </Card>
+
+  <Card title="ECS Tasks Security Group" icon="shield-halved">
+    **Ingress**:
+    - Port 8000 from ALB security group only
+    
+    **Egress**:
+    - All traffic to `0.0.0.0/0` (for external API calls)
+  </Card>
+</CardGroup>
+
+### 7. IAM Roles
+
+<AccordionGroup>
+  <Accordion title="ECS Execution Role">
+    **Purpose**: Allows ECS to pull images from ECR and write logs to CloudWatch
+    
+    **Managed Policies**:
+    - `AmazonECSTaskExecutionRolePolicy`
+    
+    **Permissions**:
+    - Pull images from ECR
+    - Create and write CloudWatch log streams
+  </Accordion>
+
+  <Accordion title="ECS Task Role">
+    **Purpose**: Grants permissions to the running container
+    
+    **Custom Permissions**:
+    - CloudWatch Logs write access
+    - Can be extended for S3, Secrets Manager, etc.
+  </Accordion>
+
+  <Accordion title="Lambda Execution Role">
+    **Purpose**: Allows Lambda to execute and write logs
+    
+    **Managed Policies**:
+    - `AWSLambdaBasicExecutionRole`
+    
+    **Custom Permissions**:
+    - CloudWatch Logs write access
+  </Accordion>
+</AccordionGroup>
+
+### 8. CloudWatch Log Groups
+
+<CardGroup cols={2}>
+  <Card title="ECS Logs" icon="file-lines">
+    **Log Group**: `/ecs/llmstxt-api`
+    
+    **Retention**: 14 days
+    
+    **Contents**: Application logs, errors, crawl activity
+  </Card>
+
+  <Card title="Lambda Logs" icon="file-lines">
+    **Log Group**: `/aws/lambda/llmstxt-auto-update`
+    
+    **Retention**: 14 days
+    
+    **Contents**: Scheduled recrawl execution logs
+  </Card>
+</CardGroup>
+
+**Viewing Logs**:
+
+```bash
+# ECS application logs
+aws logs tail /ecs/llmstxt-api --follow
+
+# Lambda function logs
+aws logs tail /aws/lambda/llmstxt-auto-update --follow
+```
+
+### 9. S3 Bucket (Lambda Deployments)
+
+<Card title="Lambda Package Storage" icon="box-archive">
+  **Purpose**: Stores Lambda deployment package (.zip)
+  
+  **Bucket Name**: `llmstxt-lambda-deployments-<account-id>`
+  
+  **Objects**:
+  - `lambda-deployment.zip` (~70MB with dependencies)
+</Card>
+
+## Network Architecture
+
+### VPC Configuration
+
+<Info>
+  The infrastructure uses your **default VPC** or a specified VPC with **at least 2 subnets in different availability zones** for high availability.
+</Info>
+
+**Requirements**:
+
+- **VPC**: Must have internet gateway for public access
+- **Subnets**: Minimum 2 subnets in different AZs
+- **Route Tables**: Subnets must route to internet gateway
+- **Public IPs**: ECS tasks require public IPs for external API calls
+
+**Terraform Variables**:
+
+```hcl
+variable "vpc_id" {
+  description = "VPC ID for ECS and ALB"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "Subnet IDs (must be in different AZs)"
+  type        = list(string)
+}
+```
+
+## Terraform State Management
+
+<Warning>
+  Terraform state contains sensitive information. Use remote state storage (S3 + DynamoDB) for production deployments.
+</Warning>
+
+**Recommended Backend Configuration**:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "your-terraform-state-bucket"
+    key            = "llmstxt/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "terraform-lock-table"
+  }
+}
+```
+
+## Cost Optimization
+
+<CardGroup cols={2}>
+  <Card title="ECS Fargate">
+    **Current**: 0.5 vCPU, 1 GB RAM
+    
+    **Cost**: ~$12-15/month (1 task running 24/7)
+    
+    **Optimization**: Scale to zero during off-hours if possible
+  </Card>
+
+  <Card title="Lambda">
+    **Invocations**: 4 per day (every 6 hours)
+    
+    **Cost**: Less than $1/month (free tier covers this)
+    
+    **Optimization**: Already optimized with fast execution
+  </Card>
+
+  <Card title="CloudWatch Logs">
+    **Retention**: 14 days
+    
+    **Cost**: ~$1-3/month (depends on log volume)
+    
+    **Optimization**: Reduce retention or export to S3
+  </Card>
+
+  <Card title="ALB">
+    **Cost**: ~$16-20/month (base + LCU charges)
+    
+    **Optimization**: Consider CloudFront for caching
+  </Card>
+</CardGroup>
+
+**Total Estimated Cost**: $30-40/month for AWS infrastructure
+
+## Monitoring & Alerts
+
+### CloudWatch Alarms
+
+```hcl
+# Example: High CPU alarm
+resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
+  alarm_name          = "llmstxt-ecs-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "ECS CPU utilization is too high"
+}
+```
+
+### Key Metrics to Monitor
+
+- **ECS CPU Utilization**: Should stay below 80%
+- **ECS Memory Utilization**: Should stay below 80%
+- **ALB Target Response Time**: Should be < 1 second
+- **ALB Healthy Host Count**: Should match desired count
+- **Lambda Errors**: Should be zero
+- **Lambda Duration**: Should be < 60 seconds
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Data Flow" icon="diagram-project" href="/architecture/data-flow">
+    Understand how requests flow through the infrastructure
+  </Card>
+
+  <Card title="Deployment Guide" icon="rocket" href="/deployment/overview">
+    Step-by-step deployment instructions
+  </Card>
+</CardGroup>

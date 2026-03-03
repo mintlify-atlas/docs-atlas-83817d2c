@@ -1,0 +1,501 @@
+---
+title: "Terraform Infrastructure"
+description: "Configure and deploy AWS infrastructure using Terraform"
+---
+
+## Overview
+
+Terraform is used to provision all AWS infrastructure including ECS, ECR, Application Load Balancer, Lambda, and monitoring resources.
+
+### What Terraform Creates
+
+<CardGroup cols={2}>
+  <Card title="Compute" icon="server">
+    - ECS Fargate cluster and service
+    - ECR repository for Docker images
+    - Lambda function for scheduled crawls
+  </Card>
+  <Card title="Networking" icon="network-wired">
+    - Application Load Balancer
+    - Target groups and listeners
+    - Security groups
+  </Card>
+  <Card title="Monitoring" icon="chart-line">
+    - CloudWatch log groups
+    - CloudWatch alarms (10 alerts)
+    - SNS topic for notifications
+  </Card>
+  <Card title="Automation" icon="clock">
+    - EventBridge cron schedule
+    - Lambda permissions
+    - IAM roles and policies
+  </Card>
+</CardGroup>
+
+## Configure Terraform Variables
+
+### Clone or Navigate to Terraform Directory
+
+```bash
+cd /path/to/llmstxt-generator
+cd terraform
+```
+
+### Copy Example Variables File
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+```
+
+### Edit Configuration
+
+Open `terraform.tfvars` in your editor:
+
+```bash
+nano terraform.tfvars
+# or
+vim terraform.tfvars
+# or
+code terraform.tfvars
+```
+
+### Required Variables
+
+Fill in all the following variables with values collected from previous steps:
+
+<CodeGroup>
+  ```hcl AWS Configuration
+  # AWS Configuration
+  aws_region  = "us-east-1"
+  environment = "production"
+  ```
+
+  ```hcl Supabase
+  # Supabase Configuration
+  supabase_url = "https://abcdefgh.supabase.co"
+  supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  ```
+
+  ```hcl Cloudflare R2
+  # Cloudflare R2 Configuration
+  r2_endpoint      = "https://1234567890.r2.cloudflarestorage.com"
+  r2_access_key    = "your_r2_access_key"
+  r2_secret_key    = "your_r2_secret_key"
+  r2_bucket        = "llmstxt"
+  r2_public_domain = "https://pub-xxxxx.r2.dev"
+  ```
+
+  ```hcl Network
+  # Network Configuration
+  vpc_id     = "vpc-xxxxxxxxxxxxx"  # From AWS setup
+  subnet_ids = ["subnet-xxxxxxxxxxxxx", "subnet-yyyyyyyyyyyyy"]
+  ```
+
+  ```hcl Application
+  # Application Configuration
+  cors_origins = "http://localhost:3000,https://yourdomain.com"
+  api_key      = ""  # Generate below
+  cron_secret  = ""  # Generate below
+  ```
+
+  ```hcl GitHub (Frontend)
+  # Frontend Configuration
+  github_repository = "https://github.com/your-username/llmstxt-generator"
+  github_token      = ""  # Optional, can add later
+  ```
+
+  ```hcl Monitoring
+  # Monitoring
+  alert_email = "your-email@example.com"
+  ```
+
+  ```hcl Optional APIs
+  # Optional API Keys (leave empty if not using)
+  brightdata_api_key      = ""
+  openrouter_api_key      = ""
+  llm_enhancement_enabled = "false"
+  ```
+</CodeGroup>
+
+### Generate Security Keys
+
+Generate strong random keys for API authentication:
+
+```bash
+# Generate API key for WebSocket authentication
+openssl rand -base64 32
+# Example output: 7X9k2L5m8P1q4R6s...
+
+# Generate cron secret for Lambda authentication
+openssl rand -base64 32
+# Example output: 3A6b9C2d5E8f1G4h...
+```
+
+Add these to your `terraform.tfvars`:
+
+```hcl
+api_key     = "7X9k2L5m8P1q4R6s..."  # From above
+cron_secret = "3A6b9C2d5E8f1G4h..."  # From above
+```
+
+<Warning>
+  Keep these secrets secure! They protect your API from unauthorized access.
+</Warning>
+
+## Build Lambda Deployment Package
+
+The Lambda function requires dependencies packaged into a ZIP file.
+
+<Steps>
+  <Step title="Navigate to Backend Directory">
+    ```bash
+    cd ../backend
+    ```
+  </Step>
+  
+  <Step title="Run Build Script">
+    ```bash
+    chmod +x deployment/build_lambda.sh
+    ./deployment/build_lambda.sh
+    ```
+
+    Expected output:
+    ```
+    Building Lambda deployment package...
+    Installing dependencies...
+    Copying application code...
+    Creating deployment package...
+    Lambda deployment package created: deployment/lambda-deployment.zip
+    Size: 68M
+    ```
+  </Step>
+  
+  <Step title="Copy Package to Root">
+    Terraform expects the package in `backend/` directory:
+    ```bash
+    cp deployment/lambda-deployment.zip ./lambda-deployment.zip
+    ```
+  </Step>
+  
+  <Step title="Verify Package">
+    ```bash
+    ls -lh lambda-deployment.zip
+    # Expected: ~60-70MB file
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The Lambda package includes all Python dependencies (requests, boto3, etc.) needed to trigger the recrawl endpoint.
+</Note>
+
+## Initialize Terraform
+
+Prepare Terraform to deploy infrastructure.
+
+```bash
+cd ../terraform
+terraform init
+```
+
+Expected output:
+```
+Initializing the backend...
+
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching "~> 5.0"...
+- Installing hashicorp/aws v5.x.x...
+
+Terraform has been successfully initialized!
+```
+
+<Check>
+  If initialization succeeds, you're ready to deploy!
+</Check>
+
+## Review Infrastructure Plan
+
+Before deploying, review what Terraform will create:
+
+```bash
+terraform plan
+```
+
+This shows a detailed list of resources to be created:
+
+<Accordion title="Expected Terraform Plan Output">
+  ```
+  Terraform will perform the following actions:
+
+    # aws_cloudwatch_event_rule.recrawl_schedule will be created
+    # aws_cloudwatch_event_target.lambda_target will be created
+    # aws_cloudwatch_log_group.ecs_logs will be created
+    # aws_cloudwatch_log_group.lambda_logs will be created
+    # aws_cloudwatch_metric_alarm.ecs_no_running_tasks will be created
+    # ... (10 total alarms)
+    # aws_ecr_repository.llmstxt_api will be created
+    # aws_ecs_cluster.llmstxt will be created
+    # aws_ecs_service.llmstxt_api will be created
+    # aws_ecs_task_definition.llmstxt_api will be created
+    # aws_iam_role.ecs_execution_role will be created
+    # aws_iam_role.ecs_task_role will be created
+    # aws_iam_role.lambda_execution will be created
+    # aws_lambda_function.llmstxt_auto_update will be created
+    # aws_lambda_permission.allow_eventbridge will be created
+    # aws_lb.llmstxt will be created
+    # aws_lb_listener.http will be created
+    # aws_lb_listener.https will be created
+    # aws_lb_target_group.llmstxt_api will be created
+    # aws_s3_bucket.lambda_deployments will be created
+    # aws_s3_object.lambda_package will be created
+    # aws_security_group.alb will be created
+    # aws_security_group.ecs_tasks will be created
+    # aws_sns_topic.llmstxt_alerts will be created
+    # aws_sns_topic_subscription.email_alerts will be created
+
+  Plan: 30+ to add, 0 to change, 0 to destroy.
+  ```
+</Accordion>
+
+<Note>
+  Review the plan carefully. Ensure VPC and subnet IDs are correct before proceeding.
+</Note>
+
+## Deploy Infrastructure
+
+Apply the Terraform configuration to create all AWS resources:
+
+```bash
+terraform apply
+```
+
+Terraform will show the plan again and prompt for confirmation:
+
+```
+Do you want to perform these actions?
+  Terraform will perform the actions described above.
+  Only 'yes' will be accepted to approve.
+
+  Enter a value:
+```
+
+Type `yes` and press Enter.
+
+### Deployment Progress
+
+Terraform will create resources in order (respecting dependencies):
+
+<Steps>
+  <Step title="IAM Roles & Policies (1 min)">
+    Creates execution roles for ECS and Lambda with necessary permissions.
+  </Step>
+  
+  <Step title="Network Resources (2 min)">
+    Creates security groups, Application Load Balancer, target groups, and listeners.
+  </Step>
+  
+  <Step title="Compute Resources (2 min)">
+    Creates ECR repository, ECS cluster, task definition, and service.
+  </Step>
+  
+  <Step title="Lambda & Automation (1 min)">
+    Uploads Lambda package to S3, creates Lambda function and EventBridge schedule.
+  </Step>
+  
+  <Step title="Monitoring & Alarms (2 min)">
+    Creates CloudWatch log groups, SNS topic, and 10 metric alarms.
+  </Step>
+</Steps>
+
+**Total deployment time: 5-10 minutes**
+
+### Deployment Complete
+
+When finished, Terraform outputs important values:
+
+```
+Apply complete! Resources: 30 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+alb_dns_name = "llmstxt-alb-1234567890.us-east-1.elb.amazonaws.com"
+alb_url = "http://llmstxt-alb-1234567890.us-east-1.elb.amazonaws.com"
+ecr_repository_url = "123456789012.dkr.ecr.us-east-1.amazonaws.com/llmstxt-api"
+ecs_cluster_name = "llmstxt-cluster"
+ecs_service_name = "llmstxt-api-service"
+lambda_function_name = "llmstxt-auto-update"
+```
+
+<Check>
+  Infrastructure successfully deployed! Save these output values.
+</Check>
+
+## Retrieve Terraform Outputs
+
+You can retrieve outputs anytime:
+
+```bash
+# All outputs
+terraform output
+
+# Specific output
+terraform output ecr_repository_url
+terraform output alb_dns_name
+```
+
+## Verify Resource Creation
+
+### Check ECS Cluster
+
+```bash
+aws ecs describe-clusters \
+  --clusters llmstxt-cluster \
+  --region us-east-1
+```
+
+Expected status: `ACTIVE`
+
+### Check ECR Repository
+
+```bash
+aws ecr describe-repositories \
+  --repository-names llmstxt-api \
+  --region us-east-1
+```
+
+Repository should exist but have no images yet (that's next step).
+
+### Check Load Balancer
+
+```bash
+aws elbv2 describe-load-balancers \
+  --names llmstxt-alb \
+  --region us-east-1
+```
+
+Expected state: `active`
+
+### Confirm SNS Subscription
+
+Check your email for SNS subscription confirmation:
+
+1. Look for email from `AWS Notifications <no-reply@sns.amazonaws.com>`
+2. Subject: "AWS Notification - Subscription Confirmation"
+3. Click "Confirm subscription" link
+
+<Warning>
+  You won't receive CloudWatch alerts until you confirm the SNS subscription!
+</Warning>
+
+## Terraform State Management
+
+### Local State File
+
+Terraform stores infrastructure state in `terraform.tfstate`. This file is critical for managing resources.
+
+<Warning>
+  **Protect terraform.tfstate**: Never commit to version control! Add to `.gitignore`.
+</Warning>
+
+### Recommended: Remote State Backend
+
+<Accordion title="Configure S3 Backend for Team Collaboration">
+  For production or team environments, store state remotely:
+
+  1. Create S3 bucket for state:
+  ```bash
+  aws s3 mb s3://llmstxt-terraform-state-YOUR-ACCOUNT-ID
+  ```
+
+  2. Enable versioning:
+  ```bash
+  aws s3api put-bucket-versioning \
+    --bucket llmstxt-terraform-state-YOUR-ACCOUNT-ID \
+    --versioning-configuration Status=Enabled
+  ```
+
+  3. Add backend configuration to `main.tf`:
+  ```hcl
+  terraform {
+    backend "s3" {
+      bucket = "llmstxt-terraform-state-YOUR-ACCOUNT-ID"
+      key    = "production/terraform.tfstate"
+      region = "us-east-1"
+    }
+  }
+  ```
+
+  4. Migrate state:
+  ```bash
+  terraform init -migrate-state
+  ```
+</Accordion>
+
+## Common Issues & Solutions
+
+<AccordionGroup>
+  <Accordion title="Error: Subnet not found">
+    **Problem**: Invalid subnet IDs in `terraform.tfvars`
+    
+    **Solution**: Verify subnet IDs:
+    ```bash
+    aws ec2 describe-subnets \
+      --subnet-ids subnet-xxxxx subnet-yyyyy
+    ```
+    Ensure subnets exist and are in different availability zones.
+  </Accordion>
+
+  <Accordion title="Error: Lambda package not found">
+    **Problem**: `lambda-deployment.zip` missing
+    
+    **Solution**: Build Lambda package:
+    ```bash
+    cd ../backend
+    ./deployment/build_lambda.sh
+    cp deployment/lambda-deployment.zip ./
+    cd ../terraform
+    ```
+  </Accordion>
+
+  <Accordion title="Error: Certificate validation pending">
+    **Problem**: ACM certificate waiting for DNS validation
+    
+    **Solution**: This is expected. Certificate validation happens after DNS records are added. The ALB will use HTTP (port 80) until then.
+  </Accordion>
+
+  <Accordion title="Error: Insufficient IAM permissions">
+    **Problem**: AWS user lacks required permissions
+    
+    **Solution**: Attach `AdministratorAccess` policy (or create custom policy with required permissions).
+  </Accordion>
+</AccordionGroup>
+
+## Update Infrastructure
+
+To modify infrastructure after initial deployment:
+
+1. Edit `terraform.tfvars` or `*.tf` files
+2. Review changes: `terraform plan`
+3. Apply changes: `terraform apply`
+
+Terraform only modifies changed resources.
+
+## Destroy Infrastructure
+
+<Warning>
+  **Destructive Action**: This deletes ALL AWS resources created by Terraform.
+</Warning>
+
+To tear down the entire infrastructure:
+
+```bash
+terraform destroy
+```
+
+Type `yes` to confirm deletion.
+
+## Next Steps
+
+<Card title="Docker & ECS Deployment" icon="docker" href="/deployment/docker-ecs">
+  Build Docker image and deploy to ECS Fargate
+</Card>

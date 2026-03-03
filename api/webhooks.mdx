@@ -1,0 +1,424 @@
+---
+title: 'Site Change Webhook'
+description: 'Trigger immediate recrawl when site content changes'
+---
+
+## Overview
+
+The webhook endpoint allows external systems to notify the llms.txt generator when a website's content has changed, triggering an immediate recrawl. This is useful for keeping `llms.txt` files synchronized with content management systems, CI/CD pipelines, or other automated workflows.
+
+Unlike the scheduled cron endpoint, this webhook triggers a recrawl for a **specific site** immediately.
+
+## Endpoint
+
+```
+POST /internal/hooks/site-changed
+```
+
+## Authentication
+
+Webhooks support **optional per-site authentication** via webhook secrets:
+
+- If a `webhook_secret` is configured for the site in the database, it must be provided in the request
+- If no secret is configured, the webhook can be called without authentication (not recommended for production)
+
+<ParamField body="webhook_secret" type="string">
+  Optional secret token for authenticating webhook calls. Must match the `webhook_secret` stored in the database for the given site.
+</ParamField>
+
+## Request
+
+<ParamField body="base_url" type="string" required>
+  The base URL of the site to recrawl. Must match a site enrolled in the auto-update system.
+  
+  Example: `"https://docs.example.com"`
+</ParamField>
+
+<ParamField body="webhook_secret" type="string">
+  Authentication secret (required only if configured for this site in the database).
+</ParamField>
+
+### Example Request
+
+```bash
+curl -X POST https://api.example.com/internal/hooks/site-changed \
+  -H "Content-Type: application/json" \
+  -d '{
+    "base_url": "https://docs.example.com",
+    "webhook_secret": "your-webhook-secret"
+  }'
+```
+
+```javascript
+const response = await fetch('https://api.example.com/internal/hooks/site-changed', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    base_url: 'https://docs.example.com',
+    webhook_secret: 'your-webhook-secret'
+  })
+});
+
+const data = await response.json();
+console.log('Scheduled at:', data.next_crawl_at);
+```
+
+```python
+import httpx
+
+response = httpx.post(
+    "https://api.example.com/internal/hooks/site-changed",
+    json={
+        "base_url": "https://docs.example.com",
+        "webhook_secret": "your-webhook-secret"
+    }
+)
+
+print(response.json())
+```
+
+## Response
+
+### Success Response (200)
+
+<ResponseField name="status" type="string">
+  Always `"scheduled"` when the recrawl is successfully queued.
+</ResponseField>
+
+<ResponseField name="base_url" type="string">
+  The base URL that was scheduled for recrawl (echoed from request).
+</ResponseField>
+
+<ResponseField name="next_crawl_at" type="string">
+  ISO 8601 timestamp when the recrawl will be processed. Set to current time for immediate processing.
+</ResponseField>
+
+```json
+{
+  "status": "scheduled",
+  "base_url": "https://docs.example.com",
+  "next_crawl_at": "2024-03-15T10:30:00.000Z"
+}
+```
+
+### Error Responses
+
+#### Site Not Enrolled (404)
+
+Returned when the `base_url` is not found in the `crawl_sites` table.
+
+```json
+{
+  "detail": "Site not enrolled"
+}
+```
+
+**Solution**: The site must first be crawled with `enableAutoUpdate: true` via the WebSocket endpoint.
+
+#### Invalid Webhook Secret (401)
+
+Returned when the provided `webhook_secret` doesn't match the stored value.
+
+```json
+{
+  "detail": "Invalid webhook secret"
+}
+```
+
+#### Database Unavailable (503)
+
+Returned when Supabase connection fails.
+
+```json
+{
+  "detail": "Database unavailable"
+}
+```
+
+#### Internal Error (500)
+
+Returned for unexpected server errors.
+
+```json
+{
+  "detail": "Error message details"
+}
+```
+
+## How It Works
+
+### 1. Validation
+
+The endpoint performs these checks:
+
+1. **Database connectivity**: Ensures Supabase is available
+2. **Site enrollment**: Verifies `base_url` exists in `crawl_sites` table
+3. **Secret validation**: If a secret is stored, validates the provided secret matches
+
+### 2. Scheduling
+
+If validation passes:
+
+1. Sets `next_crawl_at` to **current timestamp** (immediate processing)
+2. Updates `updated_at` timestamp
+3. Returns confirmation
+
+### 3. Processing
+
+The actual recrawl happens when:
+
+- The scheduled cron job runs (checks for sites with `next_crawl_at <= NOW()`)
+- This webhook sets `next_crawl_at` to now, so the site will be picked up on the next cron run
+
+<Info>
+The webhook **schedules** a recrawl but doesn't execute it immediately. The cron job must be running to process scheduled recrawls.
+</Info>
+
+## Integration Examples
+
+### Mintlify CI/CD
+
+```yaml
+# .github/workflows/deploy-docs.yml
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        
+      - name: Deploy to Mintlify
+        run: |
+          # Your Mintlify deployment steps
+          
+      - name: Trigger llms.txt Update
+        run: |
+          curl -X POST ${{ secrets.LLMSTXT_API_URL }}/internal/hooks/site-changed \
+            -H "Content-Type: application/json" \
+            -d '{
+              "base_url": "https://docs.yoursite.com",
+              "webhook_secret": "${{ secrets.WEBHOOK_SECRET }}"
+            }'
+```
+
+### Next.js API Route
+
+```typescript
+// pages/api/notify-llmstxt.ts
+import type { NextApiRequest, NextApiResponse } from 'next';
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  // Verify request is from your CMS or build system
+  if (req.headers.authorization !== `Bearer ${process.env.CMS_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const response = await fetch(
+    `${process.env.LLMSTXT_API_URL}/internal/hooks/site-changed`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base_url: process.env.NEXT_PUBLIC_SITE_URL,
+        webhook_secret: process.env.LLMSTXT_WEBHOOK_SECRET
+      })
+    }
+  );
+
+  const data = await response.json();
+  res.status(response.status).json(data);
+}
+```
+
+### Vercel Deploy Hook
+
+```bash
+# Add to your Vercel project settings
+# Settings > Git > Deploy Hooks > Add Deploy Hook
+# Then add this as a post-deploy script:
+
+curl -X POST https://api.example.com/internal/hooks/site-changed \
+  -H "Content-Type: application/json" \
+  -d '{
+    "base_url": "https://yoursite.com",
+    "webhook_secret": "'$WEBHOOK_SECRET'"
+  }'
+```
+
+### WordPress Plugin
+
+```php
+<?php
+// functions.php or custom plugin
+
+add_action('save_post', 'trigger_llmstxt_update', 10, 3);
+
+function trigger_llmstxt_update($post_id, $post, $update) {
+    // Only trigger on published posts/pages
+    if ($post->post_status !== 'publish') {
+        return;
+    }
+    
+    $api_url = get_option('llmstxt_api_url');
+    $base_url = get_site_url();
+    $webhook_secret = get_option('llmstxt_webhook_secret');
+    
+    wp_remote_post($api_url . '/internal/hooks/site-changed', [
+        'headers' => ['Content-Type' => 'application/json'],
+        'body' => json_encode([
+            'base_url' => $base_url,
+            'webhook_secret' => $webhook_secret
+        ])
+    ]);
+}
+```
+
+## Security Configuration
+
+### Setting Up Webhook Secrets
+
+Webhook secrets are stored per-site in the `crawl_sites` table:
+
+```sql
+-- Add webhook secret for a site
+UPDATE crawl_sites
+SET webhook_secret = 'your-secure-webhook-secret'
+WHERE base_url = 'https://docs.example.com';
+```
+
+Generate secure webhook secrets:
+
+```bash
+openssl rand -base64 32
+```
+
+### Security Best Practices
+
+1. **Always use webhook secrets** in production
+2. **Generate unique secrets** per site if hosting multiple sites
+3. **Use HTTPS** for all webhook calls
+4. **Rotate secrets** periodically
+5. **Store secrets securely** (environment variables, secret managers)
+6. **Validate webhook source** in your CI/CD pipeline
+
+## Database Schema
+
+Relevant fields in the `crawl_sites` table:
+
+```sql
+CREATE TABLE crawl_sites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    base_url TEXT UNIQUE NOT NULL,
+    next_crawl_at TIMESTAMP WITH TIME ZONE,
+    webhook_secret TEXT,  -- Optional per-site webhook authentication
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+## Error Codes
+
+| Status Code | Description | Reason |
+|-------------|-------------|--------|
+| 200 | Success | Recrawl scheduled successfully |
+| 401 | Unauthorized | Invalid or missing webhook secret |
+| 404 | Not Found | Site not enrolled in auto-update system |
+| 503 | Service Unavailable | Database connection failed |
+| 500 | Internal Server Error | Unexpected server error |
+
+## Rate Limiting
+
+No explicit rate limits are enforced on this endpoint. However:
+
+- Multiple calls for the same site will update `next_crawl_at` each time
+- The cron job processes sites sequentially, so only one recrawl happens at a time
+- Consider implementing rate limiting in your webhook caller to avoid excessive requests
+
+## Monitoring
+
+Check database to verify webhook calls:
+
+```sql
+-- View scheduled recrawls
+SELECT base_url, next_crawl_at, updated_at
+FROM crawl_sites
+WHERE next_crawl_at <= NOW()
+ORDER BY next_crawl_at;
+
+-- View recent webhook triggers
+SELECT base_url, updated_at
+FROM crawl_sites
+ORDER BY updated_at DESC
+LIMIT 10;
+```
+
+## Comparison with Cron Endpoint
+
+| Feature | Webhook (`/hooks/site-changed`) | Cron (`/cron/recrawl`) |
+|---------|--------------------------------|------------------------|
+| **Scope** | Single specific site | All due sites |
+| **Trigger** | External webhook call | Scheduled timer |
+| **Auth** | Per-site webhook secret | Global cron secret |
+| **Timing** | Immediate (on next cron run) | Scheduled intervals |
+| **Use Case** | Content changes, deployments | Periodic maintenance |
+
+## Best Practices
+
+1. **Enroll sites first**: Use WebSocket endpoint with `enableAutoUpdate: true`
+2. **Set webhook secrets**: Always configure secrets for production sites
+3. **Call after deploy**: Trigger webhook after content is published, not before
+4. **Handle errors**: Implement retry logic for failed webhook calls
+5. **Monitor database**: Check `next_crawl_at` is updated correctly
+6. **Run cron frequently**: Ensure cron job runs often enough to pick up webhook triggers
+
+## Troubleshooting
+
+### Webhook Returns 404 "Site not enrolled"
+
+**Cause**: The site hasn't been crawled with auto-update enabled.
+
+**Solution**: Crawl the site via WebSocket with `enableAutoUpdate: true`:
+```json
+{
+  "url": "https://docs.example.com",
+  "maxPages": 50,
+  "enableAutoUpdate": true,
+  "recrawlIntervalMinutes": 1440
+}
+```
+
+### Webhook Returns 401 "Invalid webhook secret"
+
+**Cause**: The provided secret doesn't match the database value.
+
+**Solution**: Check the stored secret:
+```sql
+SELECT webhook_secret FROM crawl_sites WHERE base_url = 'https://docs.example.com';
+```
+
+### Recrawl Not Happening After Webhook
+
+**Cause**: Cron job not running or running infrequently.
+
+**Solution**: 
+1. Verify cron job is scheduled and running
+2. Check `next_crawl_at` was updated:
+   ```sql
+   SELECT base_url, next_crawl_at FROM crawl_sites WHERE base_url = 'https://docs.example.com';
+   ```
+3. Check cron job logs for errors
+
+## Related Endpoints
+
+- [Cron Recrawl](/api/cron-triggers) - Schedule automatic recrawls
+- [WebSocket Crawl](/api/websocket) - Initial crawl with auto-update enrollment

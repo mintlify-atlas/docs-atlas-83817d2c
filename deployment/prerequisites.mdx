@@ -1,0 +1,339 @@
+---
+title: "Prerequisites"
+description: "Install required tools and create service accounts for deployment"
+---
+
+## Required Tools
+
+Before deploying the llms.txt Generator, ensure you have the following tools installed on your local machine.
+
+### Tool Versions
+
+<CardGroup cols={2}>
+  <Card title="AWS CLI" icon="aws">
+    Version 2.0 or higher required for AWS resource management
+  </Card>
+  <Card title="Terraform" icon="code">
+    Version 1.0 or higher for infrastructure as code
+  </Card>
+  <Card title="Docker" icon="docker">
+    Latest version for building and pushing container images
+  </Card>
+  <Card title="Node.js" icon="node">
+    Version 20 or higher for frontend development
+  </Card>
+</CardGroup>
+
+### Installation Commands
+
+<Tabs>
+  <Tab title="macOS (Homebrew)">
+    ```bash
+    # Install Homebrew (if not already installed)
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+    # Install all required tools
+    brew install awscli terraform docker node python@3.11
+
+    # Start Docker daemon
+    open -a Docker
+    ```
+  </Tab>
+  
+  <Tab title="Linux (Ubuntu/Debian)">
+    ```bash
+    # Update package manager
+    sudo apt-get update
+
+    # Install AWS CLI
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip awscliv2.zip
+    sudo ./aws/install
+
+    # Install Terraform
+    wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+    sudo apt-get update && sudo apt-get install terraform
+
+    # Install Docker
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sudo sh get-docker.sh
+
+    # Install Node.js 20
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+
+    # Install Python 3.11
+    sudo apt-get install python3.11 python3-pip
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    ```powershell
+    # Install Chocolatey (if not already installed)
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+    # Install all required tools
+    choco install awscli terraform docker-desktop nodejs python311
+
+    # Start Docker Desktop
+    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    ```
+  </Tab>
+</Tabs>
+
+### Verify Installations
+
+Run these commands to verify all tools are properly installed:
+
+```bash
+# AWS CLI
+aws --version
+# Expected: aws-cli/2.x.x ...
+
+# Terraform
+terraform --version
+# Expected: Terraform v1.x.x
+
+# Docker
+docker --version
+# Expected: Docker version 24.x.x
+
+# Node.js
+node --version
+# Expected: v20.x.x
+
+# Python
+python3 --version
+# Expected: Python 3.11.x
+```
+
+<Warning>
+  If any command fails, revisit the installation steps for that specific tool.
+</Warning>
+
+## Required Accounts
+
+You'll need accounts with the following services. Most offer free tiers suitable for getting started.
+
+### AWS Account
+
+<Steps>
+  <Step title="Create AWS Account">
+    Visit [aws.amazon.com](https://aws.amazon.com) and sign up for a new account. You'll need:
+    - Valid email address
+    - Credit card for verification
+    - Phone number for 2FA
+  </Step>
+  
+  <Step title="Enable Billing Alerts">
+    Set up billing alerts to avoid unexpected charges:
+    1. Go to AWS Billing Console
+    2. Navigate to "Billing Preferences"
+    3. Enable "Receive Billing Alerts"
+    4. Create CloudWatch alarm for budget threshold
+  </Step>
+  
+  <Step title="Create IAM User">
+    For security, create an IAM user instead of using root credentials:
+    1. Go to IAM Console
+    2. Create new user with "Programmatic access"
+    3. Attach policy: `AdministratorAccess` (or custom limited policy)
+    4. Save Access Key ID and Secret Access Key
+  </Step>
+</Steps>
+
+<Note>
+  **Cost Estimate**: AWS infrastructure will cost approximately $35-40/month. Free tier covers some services for the first 12 months.
+</Note>
+
+### Supabase Account
+
+<Steps>
+  <Step title="Sign Up">
+    Visit [supabase.com](https://supabase.com) and create a free account using:
+    - GitHub account (recommended)
+    - Email and password
+  </Step>
+  
+  <Step title="Create Project">
+    1. Click "New Project"
+    2. Choose organization (or create new)
+    3. Enter project name: `llmstxt-generator`
+    4. Create strong database password (save it securely)
+    5. Select region closest to your users
+    6. Choose free tier plan
+  </Step>
+  
+  <Step title="Save Credentials">
+    From Project Settings → API, copy:
+    - **Project URL**: `https://xxxxx.supabase.co`
+    - **Anon/Public Key**: `eyJhbGc...` (long string)
+  </Step>
+</Steps>
+
+<Note>
+  **Free Tier**: 500MB database, 1GB file storage, 2GB bandwidth/month. Sufficient for testing and small deployments.
+</Note>
+
+### Cloudflare Account
+
+<Steps>
+  <Step title="Create Account">
+    Visit [cloudflare.com](https://cloudflare.com) and sign up with email.
+  </Step>
+  
+  <Step title="Enable R2 Storage">
+    1. Navigate to R2 in dashboard
+    2. Click "Purchase R2"
+    3. Enable R2 (free tier available)
+  </Step>
+  
+  <Step title="Create R2 Bucket">
+    1. Click "Create bucket"
+    2. Name: `llmstxt` (or your preferred name)
+    3. Location: Automatic (recommended)
+    4. Enable public access
+  </Step>
+  
+  <Step title="Generate API Token">
+    1. Go to "Manage R2 API Tokens"
+    2. Click "Create API Token"
+    3. Permissions: **Read & Write**
+    4. Bucket: Select your bucket or "All buckets"
+    5. Save:
+       - Access Key ID
+       - Secret Access Key
+       - Endpoint URL: `https://xxxxx.r2.cloudflarestorage.com`
+  </Step>
+  
+  <Step title="Get Public Domain">
+    1. Return to bucket settings
+    2. Copy "Public R2.dev subdomain": `https://pub-xxxxx.r2.dev`
+    3. Alternatively, configure custom domain
+  </Step>
+</Steps>
+
+<Note>
+  **Free Tier**: 10GB storage, 1M Class A operations, 10M Class B operations per month.
+</Note>
+
+### Vercel Account (Frontend)
+
+<Steps>
+  <Step title="Sign Up">
+    Visit [vercel.com](https://vercel.com) and create account with:
+    - GitHub account (recommended for Git integration)
+    - GitLab or Bitbucket
+    - Email
+  </Step>
+  
+  <Step title="Install Vercel CLI">
+    ```bash
+    npm install -g vercel
+    vercel login
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  **Free Tier**: 100GB bandwidth, unlimited deployments, automatic HTTPS.
+</Note>
+
+### Optional: Brightdata Account
+
+<Accordion title="Brightdata (for JavaScript-heavy sites)">
+  Brightdata's Scraping Browser is optional but recommended for crawling modern JavaScript-heavy websites.
+
+  <Steps>
+    <Step title="Create Account">
+      Visit [brightdata.com](https://brightdata.com) and sign up.
+    </Step>
+    
+    <Step title="Create Scraping Browser Zone">
+      1. Navigate to Proxies & Scraping
+      2. Add Zone → Scraping Browser
+      3. Name: `scraping_browser1`
+      4. Set password
+    </Step>
+    
+    <Step title="Save Credentials">
+      From zone settings, copy:
+      - **Customer ID** (your account ID)
+      - **Zone name**: `scraping_browser1`
+      - **Zone password**: (the one you set)
+    </Step>
+  </Steps>
+
+  <Note>
+    **Pricing**: Pay-per-use, approximately $0.001 per page request. First $1 free credit available.
+  </Note>
+</Accordion>
+
+### Optional: OpenRouter Account
+
+<Accordion title="OpenRouter (for LLM-enhanced descriptions)">
+  OpenRouter provides access to multiple LLM models for enhancing page descriptions.
+
+  <Steps>
+    <Step title="Create Account">
+      Visit [openrouter.ai](https://openrouter.ai) and sign up.
+    </Step>
+    
+    <Step title="Generate API Key">
+      1. Go to API Keys section
+      2. Create new key
+      3. Copy and save securely
+    </Step>
+    
+    <Step title="Add Credits">
+      1. Navigate to Billing
+      2. Add credits (start with $5-10)
+    </Step>
+  </Steps>
+
+  <Note>
+    LLM enhancement is optional. You can deploy without it and enable later.
+  </Note>
+</Accordion>
+
+## Credentials Checklist
+
+Before proceeding, ensure you have collected all these credentials:
+
+<Accordion title="AWS Credentials">
+  - [ ] AWS Access Key ID
+  - [ ] AWS Secret Access Key
+  - [ ] AWS Region (e.g., `us-east-1`)
+</Accordion>
+
+<Accordion title="Supabase Credentials">
+  - [ ] Supabase Project URL
+  - [ ] Supabase Anon Key
+</Accordion>
+
+<Accordion title="Cloudflare R2 Credentials">
+  - [ ] R2 Endpoint URL
+  - [ ] R2 Access Key ID
+  - [ ] R2 Secret Access Key
+  - [ ] R2 Bucket Name
+  - [ ] R2 Public Domain
+</Accordion>
+
+<Accordion title="Optional API Keys">
+  - [ ] Brightdata Customer ID (optional)
+  - [ ] Brightdata Zone Password (optional)
+  - [ ] OpenRouter API Key (optional)
+</Accordion>
+
+<Warning>
+  Store all credentials securely using a password manager. Never commit credentials to version control.
+</Warning>
+
+## Next Steps
+
+<Card title="AWS Setup" icon="aws" href="/deployment/aws-setup">
+  Configure AWS CLI and identify VPC resources for ECS deployment
+</Card>

@@ -1,0 +1,521 @@
+---
+title: "Frontend Deployment"
+description: "Deploy the Next.js frontend application to Vercel"
+---
+
+## Overview
+
+The frontend is a Next.js application that provides a web interface for the llms.txt Generator. It connects to the backend API via WebSocket for real-time crawl progress.
+
+### Frontend Features
+
+<CardGroup cols={2}>
+  <Card title="Real-time Crawling" icon="bolt">
+    WebSocket connection shows live progress as pages are crawled
+  </Card>
+  <Card title="Download llms.txt" icon="download">
+    Instantly download generated files or get public URLs
+  </Card>
+  <Card title="Responsive Design" icon="mobile">
+    Works on desktop, tablet, and mobile devices
+  </Card>
+  <Card title="Error Handling" icon="shield">
+    Graceful error messages and retry logic
+  </Card>
+</CardGroup>
+
+## Deployment Options
+
+The frontend can be deployed to several platforms:
+
+<Tabs>
+  <Tab title="Vercel (Recommended)">
+    Best for Next.js with automatic deployments, edge network, and zero config.
+  </Tab>
+  <Tab title="AWS Amplify">
+    Terraform includes Amplify configuration for AWS-only deployments.
+  </Tab>
+  <Tab title="Netlify">
+    Alternative platform with similar features to Vercel.
+  </Tab>
+  <Tab title="Self-hosted">
+    Deploy to your own server using Node.js or Docker.
+  </Tab>
+</Tabs>
+
+This guide focuses on **Vercel** (recommended).
+
+## Vercel Deployment
+
+### Install Vercel CLI
+
+```bash
+npm install -g vercel
+```
+
+Verify installation:
+```bash
+vercel --version
+```
+
+### Login to Vercel
+
+```bash
+vercel login
+```
+
+Choose your authentication method:
+- **GitHub** (recommended for auto-deployments)
+- **GitLab**
+- **Bitbucket**
+- **Email**
+
+### Prepare Environment Variables
+
+Before deploying, collect these values:
+
+<Steps>
+  <Step title="Get Backend URL">
+    Retrieve the Application Load Balancer URL:
+    ```bash
+    cd terraform
+    terraform output alb_dns_name
+    ```
+    Example: `llmstxt-alb-1234567890.us-east-1.elb.amazonaws.com`
+  </Step>
+  
+  <Step title="Get API Key">
+    From your `terraform.tfvars` file:
+    ```bash
+    grep api_key terraform/terraform.tfvars
+    ```
+  </Step>
+  
+  <Step title="Format WebSocket URL">
+    Construct the WebSocket URL:
+    ```
+    ws://[ALB_DNS_NAME]/ws/crawl
+    ```
+    Example: `ws://llmstxt-alb-1234567890.us-east-1.elb.amazonaws.com/ws/crawl`
+    
+    <Note>
+      Use `wss://` (secure WebSocket) if you configure HTTPS with a custom domain.
+    </Note>
+  </Step>
+</Steps>
+
+### Deploy Frontend
+
+Navigate to frontend directory and deploy:
+
+```bash
+cd frontend
+vercel
+```
+
+<Steps>
+  <Step title="Project Setup">
+    Vercel CLI will prompt for configuration:
+    
+    ```
+    ? Set up and deploy "~/frontend"? [Y/n] y
+    ? Which scope? Your Account
+    ? Link to existing project? [y/N] n
+    ? What's your project's name? llmstxt-generator
+    ? In which directory is your code located? ./
+    ```
+  </Step>
+  
+  <Step title="Framework Detection">
+    Vercel auto-detects Next.js:
+    ```
+    Auto-detected Project Settings (Next.js):
+    - Build Command: next build
+    - Output Directory: .next
+    - Development Command: next dev --port $PORT
+    
+    ? Want to override the settings? [y/N] n
+    ```
+  </Step>
+  
+  <Step title="Environment Variables">
+    After initial deployment, add environment variables:
+    ```bash
+    vercel env add NEXT_PUBLIC_WS_URL
+    # Paste: ws://your-alb-url.amazonaws.com/ws/crawl
+    # Select: Production, Preview, Development
+
+    vercel env add NEXT_PUBLIC_API_KEY
+    # Paste: your-api-key-from-terraform
+    # Select: Production, Preview, Development
+    ```
+  </Step>
+  
+  <Step title="Production Deployment">
+    Deploy to production with environment variables:
+    ```bash
+    vercel --prod
+    ```
+  </Step>
+</Steps>
+
+### Deployment Output
+
+Successful deployment shows:
+
+```
+🔍  Inspect: https://vercel.com/your-account/llmstxt-generator/...
+✅  Production: https://llmstxt-generator.vercel.app [2s]
+```
+
+<Check>
+  Frontend is now live! Visit the URL to test.
+</Check>
+
+## Configure Environment Variables (Alternative Method)
+
+### Via Vercel Dashboard
+
+<Steps>
+  <Step title="Open Project Settings">
+    1. Go to [vercel.com/dashboard](https://vercel.com/dashboard)
+    2. Select your project: `llmstxt-generator`
+    3. Navigate to **Settings** → **Environment Variables**
+  </Step>
+  
+  <Step title="Add Variables">
+    Add each variable:
+
+    | Key | Value | Environments |
+    |-----|-------|-------------|
+    | `NEXT_PUBLIC_WS_URL` | `ws://your-alb.amazonaws.com/ws/crawl` | Production, Preview, Development |
+    | `NEXT_PUBLIC_API_KEY` | Your API key | Production, Preview, Development |
+  </Step>
+  
+  <Step title="Redeploy">
+    Trigger a new deployment to apply variables:
+    ```bash
+    vercel --prod
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Environment variables prefixed with `NEXT_PUBLIC_` are exposed to the browser. Never put secrets without this prefix in client-side code.
+</Warning>
+
+## Test Frontend
+
+### Access the Application
+
+Visit your Vercel URL: `https://llmstxt-generator.vercel.app`
+
+### Verify WebSocket Connection
+
+<Steps>
+  <Step title="Open Browser DevTools">
+    Press `F12` or right-click → **Inspect** → **Console** tab
+  </Step>
+  
+  <Step title="Enter URL and Start Crawl">
+    In the web interface:
+    1. Enter a URL (e.g., `https://example.com`)
+    2. Set max pages (e.g., `10`)
+    3. Click **"Generate llms.txt"**
+  </Step>
+  
+  <Step title="Watch Console Logs">
+    You should see:
+    - WebSocket connection established
+    - Crawl progress messages
+    - Page discoveries
+    - Completion message
+  </Step>
+</Steps>
+
+<Check>
+  If you see real-time progress, the frontend is correctly connected to the backend!
+</Check>
+
+## Configure Custom Domain (Optional)
+
+<Accordion title="Use your own domain for the frontend">
+  <Steps>
+    <Step title="Add Domain in Vercel">
+      1. Go to Project **Settings** → **Domains**
+      2. Click **"Add"**
+      3. Enter your domain: `llms.yoursite.com`
+      4. Click **"Add"**
+    </Step>
+    
+    <Step title="Update DNS Records">
+      Vercel provides DNS records to add:
+
+      **For root domain** (`yoursite.com`):
+      - Type: `A`
+      - Name: `@`
+      - Value: `76.76.21.21`
+
+      **For subdomain** (`llms.yoursite.com`):
+      - Type: `CNAME`
+      - Name: `llms`
+      - Value: `cname.vercel-dns.com`
+    </Step>
+    
+    <Step title="Wait for Verification">
+      Vercel automatically provisions SSL certificate (1-5 minutes).
+    </Step>
+    
+    <Step title="Update WebSocket URL">
+      If using HTTPS frontend with HTTP backend:
+      - Use `wss://` for WebSocket URL (requires HTTPS backend)
+      - Or configure backend custom domain with SSL
+    </Step>
+  </Steps>
+</Accordion>
+
+## AWS Amplify Deployment (Alternative)
+
+If you prefer to deploy the frontend on AWS:
+
+<Accordion title="Deploy frontend using AWS Amplify (configured in Terraform)">
+  Terraform already created an Amplify app. Complete the setup:
+
+  ### Connect GitHub Repository
+
+  <Steps>
+    <Step title="Get Amplify App ID">
+      ```bash
+      cd terraform
+      terraform output amplify_app_id
+      ```
+    </Step>
+    
+    <Step title="Open Amplify Console">
+      1. Go to [AWS Amplify Console](https://console.aws.amazon.com/amplify/)
+      2. Select your app: `llmstxt-frontend`
+    </Step>
+    
+    <Step title="Connect Repository">
+      1. Click **"Connect branch"**
+      2. Choose **GitHub**
+      3. Authorize AWS Amplify
+      4. Select repository and branch (`main` or `master`)
+    </Step>
+    
+    <Step title="Configure Build Settings">
+      Amplify auto-detects Next.js. Verify:
+      ```yaml
+      version: 1
+      frontend:
+        phases:
+          preBuild:
+            commands:
+              - npm ci
+          build:
+            commands:
+              - npm run build
+        artifacts:
+          baseDirectory: .next
+          files:
+            - '**/*'
+        cache:
+          paths:
+            - node_modules/**/*
+      ```
+    </Step>
+    
+    <Step title="Add Environment Variables">
+      In Amplify Console → **Environment variables**:
+      - `NEXT_PUBLIC_WS_URL`
+      - `NEXT_PUBLIC_API_KEY`
+    </Step>
+    
+    <Step title="Deploy">
+      Save and deploy. Amplify will:
+      1. Clone repository
+      2. Install dependencies
+      3. Build Next.js app
+      4. Deploy to CDN
+    </Step>
+  </Steps>
+
+  ### Get Amplify URL
+
+  ```bash
+  terraform output amplify_app_url
+  ```
+
+  Example: `https://infra.d1a2b3c4d5e6f7.amplifyapp.com`
+</Accordion>
+
+## Continuous Deployment
+
+### Vercel GitHub Integration
+
+Enable automatic deployments on Git push:
+
+<Steps>
+  <Step title="Connect Git Repository">
+    In Vercel dashboard:
+    1. Go to Project **Settings** → **Git**
+    2. Click **"Connect Git Repository"**
+    3. Select GitHub/GitLab/Bitbucket
+    4. Choose repository
+  </Step>
+  
+  <Step title="Configure Branch Deployments">
+    - **Production branch**: `main` or `master`
+    - **Preview branches**: All other branches
+  </Step>
+  
+  <Step title="Push Changes">
+    Every push triggers automatic deployment:
+    ```bash
+    git add .
+    git commit -m "Update frontend"
+    git push origin main
+    ```
+  </Step>
+</Steps>
+
+Vercel will:
+- Build and deploy on every push
+- Create preview URLs for PRs
+- Run build checks before merging
+
+## Frontend Configuration
+
+### Update Backend URL
+
+If your backend URL changes (e.g., custom domain):
+
+```bash
+vercel env rm NEXT_PUBLIC_WS_URL production
+vercel env add NEXT_PUBLIC_WS_URL production
+# Enter new URL
+
+vercel --prod  # Redeploy
+```
+
+### Configure CORS
+
+Ensure backend allows your frontend domain:
+
+Edit `terraform/terraform.tfvars`:
+```hcl
+cors_origins = "https://llmstxt-generator.vercel.app,https://yourdomain.com"
+```
+
+Apply changes:
+```bash
+cd terraform
+terraform apply
+```
+
+Force ECS redeploy:
+```bash
+aws ecs update-service \
+  --cluster llmstxt-cluster \
+  --service llmstxt-api-service \
+  --force-new-deployment
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="WebSocket connection fails">
+    **Check browser console for errors:**
+
+    - **CORS error**: Add frontend domain to `cors_origins` in backend
+    - **Connection refused**: Verify backend ALB is accessible
+    - **Invalid API key**: Check `NEXT_PUBLIC_API_KEY` matches backend
+
+    **Test backend WebSocket manually:**
+    ```bash
+    websocat "ws://your-alb.amazonaws.com/ws/crawl?api_key=YOUR_KEY"
+    ```
+  </Accordion>
+
+  <Accordion title="Build fails on Vercel">
+    **Common issues:**
+
+    1. **Missing dependencies**: Check `package.json`
+    2. **Build errors**: Run locally first:
+       ```bash
+       cd frontend
+       npm install
+       npm run build
+       ```
+    3. **Environment variables**: Ensure they're set in Vercel
+  </Accordion>
+
+  <Accordion title="Page not found (404)">
+    **Verify Next.js routing:**
+
+    - Check `frontend/pages/` or `frontend/app/` directory structure
+    - Ensure `index.js` or `page.js` exists
+    - Review Vercel build logs for errors
+  </Accordion>
+
+  <Accordion title="Mixed content warning (HTTP/HTTPS)">
+    **When frontend uses HTTPS but backend uses HTTP:**
+
+    **Option 1**: Use HTTP WebSocket on HTTPS page (browser blocks this)
+    
+    **Option 2**: Configure HTTPS for backend:
+    1. Set up custom domain for ALB
+    2. Use ACM certificate (already created by Terraform)
+    3. Update WebSocket URL to `wss://`
+  </Accordion>
+</AccordionGroup>
+
+## Performance Optimization
+
+### Enable Vercel Analytics
+
+```bash
+cd frontend
+npm install @vercel/analytics
+```
+
+Add to `pages/_app.js`:
+```javascript
+import { Analytics } from '@vercel/analytics/react';
+
+export default function App({ Component, pageProps }) {
+  return (
+    <>
+      <Component {...pageProps} />
+      <Analytics />
+    </>
+  );
+}
+```
+
+### Configure Caching
+
+Optimize static assets in `next.config.js`:
+```javascript
+module.exports = {
+  async headers() {
+    return [
+      {
+        source: '/static/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
+      },
+    ];
+  },
+};
+```
+
+## Next Steps
+
+<Card title="Monitoring & Logs" icon="chart-line" href="/deployment/monitoring">
+  Set up CloudWatch monitoring and alerts for your deployment
+</Card>

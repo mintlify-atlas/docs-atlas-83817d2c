@@ -1,0 +1,536 @@
+---
+title: 'Data Flow'
+description: 'Complete data flow from crawl request to llms.txt generation and storage'
+icon: 'diagram-project'
+---
+
+## Overview
+
+This page documents the complete data flow through the llms.txt Generator system, from initial user request to final llms.txt file delivery.
+
+## User-Initiated Crawl Flow
+
+### Step-by-Step Flow Diagram
+
+```
+┌─────────┐
+│  User   │
+└────┬────┘
+     │ 1. Submit URL + Config
+     ▼
+┌──────────────┐
+│  Next.js UI  │
+└──────┬───────┘
+       │ 2. WebSocket Connection
+       │    ws://backend/ws/crawl?api_key=xxx
+       ▼
+┌───────────────────┐
+│  FastAPI Backend  │
+│  ┌─────────────┐  │
+│  │   main.py   │  │ 3. Validate API Key / JWT
+│  │  @websocket │  │
+│  └──────┬──────┘  │
+│         │          │
+│  ┌──────▼───────┐ │
+│  │ LLMCrawler   │ │ 4. Initialize Crawler
+│  │  - BFS queue │ │
+│  │  - Sitemap   │ │
+│  └──────┬───────┘ │
+└─────────┼─────────┘
+          │
+     ┌────┴────┐
+     │         │
+     ▼         ▼
+┌─────────┐ ┌──────────┐
+│  httpx  │ │Playwright│ 5. Fetch Pages
+│ (fast)  │ │(JS sites)│    - Try httpx first
+└────┬────┘ └────┬─────┘    - Fallback to Playwright
+     │           │           - Optional: Brightdata proxy
+     └─────┬─────┘
+           │
+           ▼
+    ┌──────────────┐
+    │BeautifulSoup │ 6. Extract Content
+    │  - Title     │    - HTML parsing
+    │  - Desc      │    - Text extraction
+    │  - Links     │    - Link discovery
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐
+    │  formatter   │ 7. Generate llms.txt
+    │  - Markdown  │    - Spec compliant
+    │  - Hierarchy │    - Check for .md URLs
+    │  - Snippets  │    - Format sections
+    └──────┬───────┘
+           │
+           ▼ (optional)
+    ┌──────────────┐
+    │LLM Processor │ 8. Enhance (Optional)
+    │  Grok 4.1    │    - Summarize
+    │  OpenRouter  │    - Optimize
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Cloudflare   │ 9. Upload to R2
+    │      R2      │    - Generate filename
+    │   Storage    │    - Save llms.txt
+    └──────┬───────┘    - Return public URL
+           │
+           ▼
+    ┌──────────────┐
+    │  Supabase    │ 10. Save Metadata
+    │  PostgreSQL  │     - base_url
+    └──────────────┘     - llms_txt_url
+                         - llms_txt_hash
+                         - last_crawled_at
+           │
+           │ 11. Stream results via WebSocket
+           │     {type: "log", content: "..."}
+           │     {type: "result", content: "# ..."}
+           │     {type: "url", content: "https://..."}
+           ▼
+    ┌──────────────┐
+    │  Next.js UI  │ 12. Display Results
+    │  - Live logs │     - Real-time logs
+    │  - Download  │     - Copy to clipboard
+    │  - Copy URL  │     - Show public URL
+    └──────────────┘
+```
+
+### Detailed Step Breakdown
+
+<Steps>
+  <Step title="User Input">
+    User enters website URL and configuration:
+    - `url`: Target website (e.g., `https://example.com`)
+    - `maxPages`: Page limit (default: 50)
+    - `descLength`: Description length (default: 500)
+    - `enableAutoUpdate`: Schedule recrawls (default: false)
+    - `recrawlIntervalMinutes`: Recrawl frequency (default: 360)
+    - `llmEnhance`: AI optimization (default: false)
+    - `useBrightdata`: Use proxy for JS sites (default: false)
+  </Step>
+
+  <Step title="WebSocket Connection">
+    Frontend establishes WebSocket connection:
+    ```typescript
+    const ws = new WebSocket(
+      `wss://backend.example.com/ws/crawl?api_key=${API_KEY}`
+    );
+    
+    ws.send(JSON.stringify({
+      url: "https://example.com",
+      maxPages: 50,
+      descLength: 500,
+      // ... other config
+    }));
+    ```
+  </Step>
+
+  <Step title="Authentication">
+    Backend validates credentials:
+    - **API Key**: Query parameter `?api_key=xxx` (main.py:98-101)
+    - **JWT Token**: Alternative via `?token=xxx` (main.py:92-96)
+    - **Rejection**: Closes connection with code 1008 if invalid
+  </Step>
+
+  <Step title="Crawler Initialization">
+    LLMCrawler instance created with configuration:
+    ```python
+    crawler = LLMCrawler(
+        url=payload['url'],
+        max_pages=payload.get('maxPages', 50),
+        desc_length=payload.get('descLength', 500),
+        log_callback=log,
+        brightdata_api_key=settings.brightdata_api_key,
+        brightdata_enabled=payload.get('useBrightdata', False)
+    )
+    ```
+  </Step>
+
+  <Step title="Sitemap Detection">
+    Crawler attempts to find sitemap (llm_crawler.py:30-38):
+    - Try `/sitemap.xml`
+    - Try `/sitemap_index.xml`
+    - Parse XML and extract URLs
+    - **If found**: Populate queue with sitemap URLs
+    - **If not found**: Use BFS crawl starting from homepage
+  </Step>
+
+  <Step title="Page Fetching">
+    For each URL in queue (llm_crawler.py:66-95):
+    
+    **Attempt 1: httpx (fast)**
+    - HTTP GET request with 10s timeout
+    - Check if HTML has meaningful content
+    - **Success**: Use this HTML
+    
+    **Attempt 2: Playwright (JavaScript support)**
+    - Only if httpx fails or no meaningful content
+    - Launch headless Chromium browser
+    - Wait for network idle
+    - Extract rendered HTML
+    
+    **Attempt 3: Brightdata (optional)**
+    - Only if enabled and previous attempts fail
+    - Use Brightdata's scraping browser
+    - Bypass anti-bot protections
+  </Step>
+
+  <Step title="Content Extraction">
+    BeautifulSoup parses HTML (text.py):
+    
+    **Title Extraction**:
+    - Try `<title>` tag
+    - Fallback to `<h1>` tag
+    - Fallback to "Untitled"
+    
+    **Description Extraction**:
+    - Try `<meta name="description">`
+    - Fallback to `<meta property="og:description">`
+    - Fallback to first paragraph
+    
+    **Text Content**:
+    - Extract visible text from body
+    - Remove script/style tags
+    - Clean whitespace
+    - Create snippet (truncate to desc_length)
+    
+    **Link Discovery** (scout.py):
+    - Extract all `<a href>` links
+    - Normalize URLs (relative → absolute)
+    - Filter to same domain
+    - Add to queue if not visited
+  </Step>
+
+  <Step title="llms.txt Generation">
+    Format pages into llms.txt spec (formatter.py):
+    
+    **Structure**:
+    ```markdown
+    # Site Title
+    
+    > Site description from homepage
+    
+    ## Section 1
+    
+    ### Page Title
+    URL: https://example.com/page1
+    
+    > Page excerpt (truncated to descLength)
+    
+    ### Another Page
+    URL: https://example.com/page2.md
+    
+    > Another excerpt
+    ```
+    
+    **Features**:
+    - Hierarchical section grouping
+    - Clean URL generation (prefer .md links)
+    - Content truncation at semantic boundaries
+    - Metadata header with timestamp
+  </Step>
+
+  <Step title="LLM Enhancement (Optional)">
+    If `llmEnhance: true` (main.py:138-151):
+    
+    1. Send llms.txt to OpenRouter API
+    2. Use Grok 4.1-Fast model
+    3. Prompt: Summarize, optimize, improve readability
+    4. Replace original with enhanced version
+    5. Stream enhancement status to user
+  </Step>
+
+  <Step title="Storage: R2 Upload">
+    Save to Cloudflare R2 (storage.py):
+    
+    ```python
+    # Generate filename
+    domain = urlparse(base_url).netloc
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{domain}_{timestamp}.txt"
+    
+    # Upload to R2
+    s3_client.put_object(
+        Bucket=settings.r2_bucket,
+        Key=filename,
+        Body=llms_txt.encode('utf-8'),
+        ContentType='text/plain',
+        ACL='public-read'
+    )
+    
+    # Return public URL
+    public_url = f"{settings.r2_public_domain}/{filename}"
+    ```
+  </Step>
+
+  <Step title="Database: Save Metadata">
+    Store in Supabase (database.py:save_site_metadata):
+    
+    ```python
+    supabase.table("crawl_sites").upsert({
+        "base_url": base_url,
+        "max_pages": max_pages,
+        "desc_length": desc_length,
+        "recrawl_interval_minutes": recrawl_interval_minutes,
+        "last_crawled_at": datetime.now(timezone.utc),
+        "llms_txt_url": hosted_url,
+        "llms_txt_hash": hashlib.sha256(llms_txt.encode()).hexdigest(),
+        "updated_at": datetime.now(timezone.utc)
+    }).execute()
+    ```
+  </Step>
+
+  <Step title="Real-time Updates">
+    Backend streams messages to frontend via WebSocket:
+    
+    **Log Messages**:
+    ```json
+    {"type": "log", "content": "Visiting: https://example.com/page1"}
+    {"type": "log", "content": "✓ httpx succeeded"}
+    {"type": "log", "content": "Crawled 10/50 pages"}
+    ```
+    
+    **Result**:
+    ```json
+    {"type": "result", "content": "# Example.com\n\n> Description..."}
+    ```
+    
+    **Public URL**:
+    ```json
+    {"type": "url", "content": "https://pub-xxx.r2.dev/example.com_20260303.txt"}
+    ```
+    
+    **Errors**:
+    ```json
+    {"type": "error", "content": "Failed to fetch page: timeout"}
+    ```
+  </Step>
+
+  <Step title="UI Display">
+    Frontend receives messages and updates UI:
+    - **Logs**: Append to scrolling log viewer
+    - **Result**: Display in preview pane
+    - **URL**: Show copy/download buttons
+    - **Errors**: Display error banner
+  </Step>
+</Steps>
+
+## Scheduled Recrawl Flow
+
+### Automatic Update Diagram
+
+```
+    ┌──────────────┐
+    │  EventBridge │ Every 6 hours: 00:00, 06:00, 12:00, 18:00 UTC
+    │  Cron Rule   │
+    └──────┬───────┘
+           │
+           │ 1. Trigger
+           ▼
+    ┌──────────────┐
+    │    Lambda    │
+    │  Function    │ 2. Execute lambda_handler.py
+    └──────┬───────┘
+           │
+           │ 3. HTTP POST /internal/cron/recrawl
+           │    Headers: {"X-Cron-Secret": "xxx"}
+           ▼
+    ┌──────────────┐
+    │   FastAPI    │ 4. Validate cron secret
+    │   Backend    │    (main.py:46-51)
+    └──────┬───────┘
+           │
+           │ 5. background_tasks.add_task(run_recrawl_in_background)
+           │    Return immediately
+           ▼
+    ┌──────────────┐
+    │   Supabase   │ 6. Query sites due for recrawl
+    │   Database   │    WHERE last_crawled_at + interval < NOW()
+    └──────┬───────┘
+           │
+           │ 7. For each site:
+           ▼
+    ┌──────────────┐
+    │  LLMCrawler  │ 8. Recrawl website
+    │  (same flow) │    - Fetch pages
+    └──────┬───────┘    - Generate llms.txt
+           │
+           ▼
+    ┌──────────────┐
+    │ Change Check │ 9. Compare hash with previous
+    └──────┬───────┘    hash = sha256(llms_txt)
+           │
+      ┌────┴────┐
+      │         │
+   Changed   Unchanged
+      │         │
+      ▼         ▼
+   Upload    Skip
+   to R2     Upload
+      │         │
+      └────┬────┘
+           │
+           ▼
+    ┌──────────────┐
+    │  Update DB   │ 10. Update last_crawled_at
+    │   Supabase   │     Update llms_txt_hash
+    └──────────────┘     Update llms_txt_url (if changed)
+```
+
+### Recrawl Logic Details
+
+<AccordionGroup>
+  <Accordion title="Site Selection Query">
+    ```sql
+    SELECT *
+    FROM crawl_sites
+    WHERE last_crawled_at IS NOT NULL
+      AND (last_crawled_at + (recrawl_interval_minutes || ' minutes')::INTERVAL) < NOW()
+    ORDER BY last_crawled_at ASC
+    LIMIT 100;
+    ```
+    
+    This finds sites where:
+    - They've been crawled before (`last_crawled_at IS NOT NULL`)
+    - The next scheduled crawl time has passed
+    - Limited to 100 sites per run
+  </Accordion>
+
+  <Accordion title="Change Detection">
+    ```python
+    # Generate hash of new llms.txt
+    new_hash = hashlib.sha256(new_llms_txt.encode()).hexdigest()
+    
+    # Compare with stored hash
+    if new_hash != site['llms_txt_hash']:
+        # Content changed - upload new version
+        await upload_to_r2(new_llms_txt)
+        await log(f"✓ Content changed, uploaded new version")
+    else:
+        # No changes - skip upload
+        await log(f"✓ No changes detected, skipping upload")
+    
+    # Always update last_crawled_at
+    await update_metadata(site_id, new_hash)
+    ```
+  </Accordion>
+
+  <Accordion title="Error Handling">
+    - **Site unreachable**: Mark as failed, retry next cycle
+    - **Crawl timeout**: Partial results saved if any pages succeeded
+    - **R2 upload fails**: Log error, keep old URL in database
+    - **Database errors**: Log and continue to next site
+  </Accordion>
+</AccordionGroup>
+
+## WebSocket Message Types
+
+### Message Format Reference
+
+<CodeGroup>
+```json Log Message
+{
+  "type": "log",
+  "content": "Crawling page 25/50..."
+}
+```
+
+```json Result Message
+{
+  "type": "result",
+  "content": "# Example Site\n\n> This is the site description...\n\n## Documentation\n\n### Getting Started\nURL: https://example.com/docs/getting-started\n\n> Learn how to get started..."
+}
+```
+
+```json URL Message
+{
+  "type": "url",
+  "content": "https://pub-abc123.r2.dev/example.com_20260303_123456.txt"
+}
+```
+
+```json Error Message
+{
+  "type": "error",
+  "content": "Failed to fetch page: Connection timeout after 10s"
+}
+```
+</CodeGroup>
+
+## Data Storage Details
+
+### Supabase Schema
+
+```sql
+CREATE TABLE crawl_sites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    base_url TEXT UNIQUE NOT NULL,
+    max_pages INTEGER DEFAULT 50,
+    desc_length INTEGER DEFAULT 500,
+    recrawl_interval_minutes INTEGER DEFAULT 360,
+    last_crawled_at TIMESTAMP WITH TIME ZONE,
+    llms_txt_url TEXT,
+    llms_txt_hash TEXT,  -- SHA256 hash for change detection
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_next_crawl ON crawl_sites (
+    (last_crawled_at + (recrawl_interval_minutes || ' minutes')::INTERVAL)
+);
+```
+
+### R2 Storage Structure
+
+```
+Bucket: llms-txt/
+├── example.com_20260303_120000.txt
+├── example.com_20260303_180000.txt  (newer version)
+├── docs.python.org_20260303_121500.txt
+└── github.com_20260303_122000.txt
+
+Public URL: https://pub-abc123.r2.dev/{filename}
+```
+
+<Info>
+  Each recrawl creates a new file with a timestamp. Old versions remain accessible unless manually deleted.
+</Info>
+
+## Performance Characteristics
+
+### Typical Crawl Times
+
+- **Small site** (5-10 pages): 10-30 seconds
+- **Medium site** (20-50 pages): 30-90 seconds
+- **Large site** (50+ pages with sitemap): 1-3 minutes
+- **JS-heavy site** (with Brightdata): 2-5 minutes
+
+### Bottlenecks
+
+1. **Page Fetch Speed**: Limited by target site's response time
+2. **Playwright Launch**: ~2-3 seconds per browser instance
+3. **LLM Enhancement**: ~5-10 seconds per request
+4. **R2 Upload**: Negligible (under 1 second)
+
+### Optimization Strategies
+
+- **Sitemap first**: Faster than BFS crawl
+- **httpx before Playwright**: 10x faster for static sites
+- **Concurrent fetching**: asyncio for parallel requests
+- **Skip unchanged sites**: Hash comparison prevents redundant uploads
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/websocket">
+    Complete WebSocket API documentation
+  </Card>
+
+  <Card title="Deployment" icon="rocket" href="/deployment/overview">
+    Deploy your own instance
+  </Card>
+</CardGroup>

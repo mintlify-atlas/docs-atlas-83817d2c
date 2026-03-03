@@ -1,0 +1,457 @@
+---
+title: 'Real-time Streaming'
+description: 'WebSocket streaming with live progress updates, log messages, and result delivery'
+icon: 'signal-stream'
+---
+
+## Overview
+
+The llms.txt Generator provides real-time feedback during crawling through WebSocket connections. Every step of the crawling process is streamed to the client, allowing users to monitor progress, debug issues, and receive results as they're generated.
+
+## Why WebSockets?
+
+Traditional HTTP requests are synchronous - you send a request and wait for a complete response. Crawling a website can take 30-120 seconds depending on size, making this a poor user experience.
+
+<CardGroup cols={2}>
+  <Card title="HTTP Request" icon="stop">
+    - Single request/response
+    - No progress updates
+    - Long wait time
+    - No visibility into errors
+  </Card>
+  <Card title="WebSocket Stream" icon="play">
+    - Persistent bidirectional connection
+    - Real-time log streaming
+    - Immediate feedback
+    - Live error reporting
+  </Card>
+</CardGroup>
+
+## WebSocket Endpoint
+
+The API exposes a single WebSocket endpoint for crawling:
+
+```python backend/main.py
+@app.websocket("/ws/crawl")
+async def websocket_crawl(websocket: WebSocket):
+    # Authentication
+    token = websocket.query_params.get("token")
+    if token:
+        if not validate_token(token):
+            await websocket.close(code=1008, reason="Invalid or expired token")
+            return
+    elif settings.api_key:
+        api_key = websocket.query_params.get("api_key")
+        if api_key != settings.api_key:
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+
+    await websocket.accept()
+
+    try:
+        # Receive crawl request
+        data = await websocket.receive_text()
+        payload = json.loads(data)
+
+        url = str(payload['url'])
+        max_pages = payload.get('maxPages', 50)
+        desc_length = payload.get('descLength', 500)
+        use_brightdata = payload.get('useBrightdata', settings.brightdata_enabled)
+
+        # Log callback for real-time streaming
+        async def log(message: str):
+            await websocket.send_json({"type": "log", "content": message})
+
+        # Start crawling with live logging
+        crawler = LLMCrawler(
+            url, max_pages, desc_length, log,
+            brightdata_api_key=settings.brightdata_api_key,
+            brightdata_enabled=use_brightdata,
+            brightdata_zone=settings.brightdata_zone,
+            brightdata_password=settings.brightdata_password
+        )
+        pages = await crawler.run()
+
+        # Stream result
+        await websocket.send_json({"type": "result", "content": llms_txt})
+
+        # Stream hosted URL
+        hosted_url = await save_llms_txt(url, llms_txt, log)
+        if hosted_url:
+            await websocket.send_json({"type": "url", "content": hosted_url})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        await websocket.send_json({"type": "error", "content": str(e)})
+    finally:
+        await websocket.close()
+```
+
+<Info>
+  The `log` callback is passed directly to the crawler, enabling real-time message streaming at every step of the process.
+</Info>
+
+## Message Types
+
+The WebSocket sends JSON messages with different types:
+
+### Log Messages
+
+Progress updates and status information:
+
+```json
+{
+  "type": "log",
+  "content": "Using sitemap: found 143 URLs"
+}
+```
+
+```json
+{
+  "type": "log",
+  "content": "Visiting: https://example.com/docs/api"
+}
+```
+
+```json
+{
+  "type": "log",
+  "content": "  → Trying httpx..."
+}
+```
+
+```json
+{
+  "type": "log",
+  "content": "  ✓ httpx succeeded"
+}
+```
+
+### Result Message
+
+The complete llms.txt content:
+
+```json
+{
+  "type": "result",
+  "content": "# Example.com\n\n## API Documentation\n\nhttps://example.com/docs/api\n\n> Complete API reference..."
+}
+```
+
+### URL Message
+
+The hosted CDN URL for the generated file:
+
+```json
+{
+  "type": "url",
+  "content": "https://pub-abc123.r2.dev/example.com/llms.txt"
+}
+```
+
+### Error Message
+
+Any errors encountered during crawling:
+
+```json
+{
+  "type": "error",
+  "content": "Failed to fetch content from https://example.com/broken"
+}
+```
+
+## Authentication
+
+WebSocket connections require authentication via query parameters:
+
+<Tabs>
+  <Tab title="JWT Token (Recommended)">
+    Obtain a short-lived token from the `/auth/token` endpoint:
+
+    ```bash
+    curl -X POST https://api.llmstxt.cloud/auth/token \
+      -H "X-API-Key: your_api_key"
+    ```
+
+    Response:
+    ```json
+    {
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "expires_in": 300
+    }
+    ```
+
+    Use the token in WebSocket connection:
+    ```javascript
+    const ws = new WebSocket(
+      'wss://api.llmstxt.cloud/ws/crawl?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+    );
+    ```
+  </Tab>
+
+  <Tab title="Direct API Key">
+    Pass the API key directly in query parameters:
+
+    ```javascript
+    const ws = new WebSocket(
+      'wss://api.llmstxt.cloud/ws/crawl?api_key=your_api_key'
+    );
+    ```
+
+    <Warning>
+      Only use this method in server-side code. Never expose API keys in client-side JavaScript.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Client Implementation
+
+<CodeGroup>
+```javascript React Hook
+import { useEffect, useRef, useState } from 'react';
+
+export function useCrawlWebSocket() {
+  const [logs, setLogs] = useState([]);
+  const [result, setResult] = useState(null);
+  const [url, setUrl] = useState(null);
+  const [error, setError] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef(null);
+
+  const connect = async (crawlConfig) => {
+    // Get JWT token
+    const tokenRes = await fetch('/api/token', {
+      method: 'POST',
+      headers: { 'X-API-Key': process.env.API_KEY }
+    });
+    const { token } = await tokenRes.json();
+
+    // Connect to WebSocket
+    const ws = new WebSocket(
+      `wss://api.llmstxt.cloud/ws/crawl?token=${token}`
+    );
+
+    ws.onopen = () => {
+      setIsConnected(true);
+      ws.send(JSON.stringify(crawlConfig));
+    };
+
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+
+      switch (message.type) {
+        case 'log':
+          setLogs(prev => [...prev, message.content]);
+          break;
+        case 'result':
+          setResult(message.content);
+          break;
+        case 'url':
+          setUrl(message.content);
+          break;
+        case 'error':
+          setError(message.content);
+          break;
+      }
+    };
+
+    ws.onerror = (error) => {
+      setError('WebSocket error occurred');
+      console.error(error);
+    };
+
+    ws.onclose = () => {
+      setIsConnected(false);
+    };
+
+    wsRef.current = ws;
+  };
+
+  const disconnect = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  };
+
+  return { logs, result, url, error, isConnected, connect, disconnect };
+}
+```
+
+```python Python Client
+import asyncio
+import websockets
+import json
+
+async def crawl_with_streaming(url: str, max_pages: int = 50):
+    # Get JWT token
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            'https://api.llmstxt.cloud/auth/token',
+            headers={'X-API-Key': 'your_api_key'}
+        )
+        token = token_resp.json()['token']
+
+    # Connect to WebSocket
+    uri = f"wss://api.llmstxt.cloud/ws/crawl?token={token}"
+    
+    async with websockets.connect(uri) as websocket:
+        # Send crawl request
+        await websocket.send(json.dumps({
+            "url": url,
+            "maxPages": max_pages,
+            "descLength": 500,
+            "useBrightdata": True
+        }))
+        
+        result = None
+        hosted_url = None
+        
+        # Receive messages
+        async for message in websocket:
+            data = json.loads(message)
+            
+            if data["type"] == "log":
+                print(f"[LOG] {data['content']}")
+            elif data["type"] == "result":
+                result = data["content"]
+                print("[RESULT] Received llms.txt content")
+            elif data["type"] == "url":
+                hosted_url = data["content"]
+                print(f"[URL] {hosted_url}")
+            elif data["type"] == "error":
+                print(f"[ERROR] {data['content']}")
+                raise Exception(data["content"])
+        
+        return result, hosted_url
+
+# Usage
+result, url = asyncio.run(crawl_with_streaming('https://example.com'))
+print(f"Generated llms.txt: {url}")
+```
+
+```bash cURL (Simple Test)
+# WebSocket connections via cURL require wscat or similar tools
+npm install -g wscat
+
+# Connect to WebSocket
+wscat -c "wss://api.llmstxt.cloud/ws/crawl?api_key=your_api_key"
+
+# Send crawl request (paste this after connection)
+{"url": "https://example.com", "maxPages": 50}
+
+# Watch messages stream in real-time
+```
+</CodeGroup>
+
+## Log Streaming in Action
+
+Here's what a typical crawl log stream looks like:
+
+```
+[LOG] Using sitemap: found 143 URLs
+[LOG] Visiting: https://example.com
+[LOG]   → Trying httpx...
+[LOG]   ✓ httpx succeeded
+[LOG] Visiting: https://example.com/docs
+[LOG]   → Trying httpx...
+[LOG]   ✓ httpx succeeded
+[LOG] Visiting: https://example.com/api
+[LOG]   → Trying httpx...
+[LOG]   ✗ httpx returned empty/blocked content
+[LOG]   → Escalating to Bright Data Scraping Browser...
+[LOG]   ✓ Scraping Browser succeeded
+[LOG] Visiting: https://example.com/guides
+[LOG]   → Trying httpx...
+[LOG]   ✓ httpx succeeded
+[LOG] Crawl complete: 50 pages
+[LOG] Checking for .md versions of pages...
+[LOG] Found 12 pages with .md versions
+[LOG] Uploading to R2...
+[LOG] Upload complete: https://pub-abc123.r2.dev/example.com/llms.txt
+[RESULT] # Example.com\n\n...
+[URL] https://pub-abc123.r2.dev/example.com/llms.txt
+```
+
+## Error Handling
+
+WebSocket errors should be handled gracefully:
+
+```javascript
+ws.onerror = (error) => {
+  console.error('WebSocket error:', error);
+  // Show user-friendly error message
+};
+
+ws.onclose = (event) => {
+  if (event.code === 1008) {
+    // Authentication failure
+    console.error('Authentication failed:', event.reason);
+  } else if (event.code !== 1000) {
+    // Abnormal closure
+    console.error('Connection closed unexpectedly:', event.code);
+  }
+};
+```
+
+<Warning>
+  WebSocket connections have a timeout. If the crawl takes longer than the configured timeout (typically 5-10 minutes), the connection will be closed. Consider implementing reconnection logic for long-running crawls.
+</Warning>
+
+## Connection Lifecycle
+
+<Steps>
+  <Step title="Authentication">
+    Client obtains a JWT token or uses API key directly
+  </Step>
+  <Step title="Connection">
+    WebSocket connection established with authentication in query params
+  </Step>
+  <Step title="Request">
+    Client sends JSON payload with crawl configuration
+  </Step>
+  <Step title="Streaming">
+    Server streams log messages, progress updates, and status information
+  </Step>
+  <Step title="Result">
+    Complete llms.txt content is sent when crawling completes
+  </Step>
+  <Step title="URL">
+    Hosted CDN URL is sent after successful upload
+  </Step>
+  <Step title="Closure">
+    Connection closes gracefully after all data is transmitted
+  </Step>
+</Steps>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use JWT tokens in production">
+    JWT tokens expire after 5 minutes, limiting the damage if intercepted. Generate fresh tokens for each crawl session.
+  </Accordion>
+
+  <Accordion title="Buffer log messages">
+    If logs arrive faster than they can be displayed, buffer them and render in batches to avoid UI performance issues.
+  </Accordion>
+
+  <Accordion title="Implement reconnection">
+    For long-running crawls, implement exponential backoff reconnection logic to handle temporary network issues.
+  </Accordion>
+
+  <Accordion title="Handle partial results">
+    If the connection drops before completion, you may receive partial results. Store intermediate data and allow resume functionality.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Intelligent Crawling" icon="spider-web" href="/features/intelligent-crawling">
+    Learn how the BFS crawler discovers and extracts content
+  </Card>
+  <Card title="Auto Updates" icon="rotate" href="/features/auto-updates">
+    Set up scheduled recrawls to keep content fresh
+  </Card>
+</CardGroup>

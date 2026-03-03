@@ -1,0 +1,362 @@
+---
+title: "Database & Storage Setup"
+description: "Configure Supabase PostgreSQL database and Cloudflare R2 object storage"
+---
+
+## Supabase Database Setup
+
+Supabase provides a managed PostgreSQL database for storing crawl site metadata and scheduling information.
+
+### Create Supabase Project
+
+<Steps>
+  <Step title="Navigate to Supabase Dashboard">
+    Go to [app.supabase.com](https://app.supabase.com) and sign in.
+  </Step>
+  
+  <Step title="Create New Project">
+    1. Click **"New Project"**
+    2. Select your organization (or create one)
+    3. Configure project settings:
+       - **Name**: `llmstxt-generator`
+       - **Database Password**: Generate strong password (save securely)
+       - **Region**: Choose closest to your AWS region
+       - **Pricing Plan**: Free tier (sufficient for most use cases)
+    4. Click **"Create new project"**
+  </Step>
+  
+  <Step title="Wait for Provisioning">
+    Project creation takes 1-2 minutes. Wait for status to show "Active".
+  </Step>
+</Steps>
+
+### Retrieve Supabase Credentials
+
+Once your project is active:
+
+<Steps>
+  <Step title="Navigate to Project Settings">
+    Click the gear icon (⚙️) in the sidebar → **API**
+  </Step>
+  
+  <Step title="Copy Project URL">
+    Under "Project URL":
+    ```
+    https://abcdefghijklmnop.supabase.co
+    ```
+    <Note>
+      This is your `SUPABASE_URL` - save it for Terraform configuration.
+    </Note>
+  </Step>
+  
+  <Step title="Copy Anon/Public Key">
+    Under "Project API keys" → **anon public**:
+    ```
+    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    ```
+    <Note>
+      This is your `SUPABASE_KEY` - save it for Terraform configuration.
+    </Note>
+  </Step>
+</Steps>
+
+<Warning>
+  The `anon` key is safe to use in client applications and has row-level security. Never use the `service_role` key in client-side code.
+</Warning>
+
+### Run Database Migrations
+
+Create the `crawl_sites` table for tracking crawled websites.
+
+<Steps>
+  <Step title="Open SQL Editor">
+    In Supabase dashboard, navigate to **SQL Editor** (left sidebar).
+  </Step>
+  
+  <Step title="Create New Query">
+    Click **"New query"** button.
+  </Step>
+  
+  <Step title="Paste Migration SQL">
+    Copy and paste the following SQL:
+
+    ```sql
+    -- Create crawl_sites table for automated recrawling
+    CREATE TABLE IF NOT EXISTS crawl_sites (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      base_url TEXT UNIQUE NOT NULL,
+      recrawl_interval_minutes INTEGER NOT NULL,
+      max_pages INTEGER NOT NULL DEFAULT 50,
+      desc_length INTEGER NOT NULL DEFAULT 500,
+      last_crawled_at TIMESTAMPTZ,
+      latest_llms_hash TEXT,
+      latest_llms_url TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Create index for efficient querying of sites due for recrawl
+    CREATE INDEX IF NOT EXISTS idx_crawl_sites_due
+      ON crawl_sites(last_crawled_at, recrawl_interval_minutes);
+
+    -- Add comments for documentation
+    COMMENT ON TABLE crawl_sites IS 'Stores metadata for sites enrolled in automated llms.txt updates';
+    COMMENT ON COLUMN crawl_sites.base_url IS 'The base URL of the crawled site (unique identifier)';
+    COMMENT ON COLUMN crawl_sites.recrawl_interval_minutes IS 'How often to recrawl this site (in minutes)';
+    COMMENT ON COLUMN crawl_sites.max_pages IS 'Maximum number of pages to crawl per scan';
+    COMMENT ON COLUMN crawl_sites.desc_length IS 'Maximum length of page descriptions/snippets';
+    COMMENT ON COLUMN crawl_sites.last_crawled_at IS 'Timestamp of the last successful crawl';
+    COMMENT ON COLUMN crawl_sites.latest_llms_hash IS 'SHA-256 hash of the latest generated llms.txt content';
+    COMMENT ON COLUMN crawl_sites.latest_llms_url IS 'URL where the latest llms.txt is hosted';
+    ```
+  </Step>
+  
+  <Step title="Run the Query">
+    Click **"Run"** button or press `Ctrl+Enter` (Windows/Linux) / `Cmd+Enter` (macOS).
+  </Step>
+  
+  <Step title="Verify Table Creation">
+    Navigate to **Table Editor** in the sidebar. You should see the `crawl_sites` table with 10 columns.
+  </Step>
+</Steps>
+
+<Check>
+  Successfully created `crawl_sites` table!
+</Check>
+
+### Database Schema Overview
+
+The `crawl_sites` table structure:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key (auto-generated) |
+| `base_url` | TEXT | Website URL (unique) |
+| `recrawl_interval_minutes` | INTEGER | Recrawl frequency in minutes |
+| `max_pages` | INTEGER | Maximum pages to crawl (default: 50) |
+| `desc_length` | INTEGER | Max description length (default: 500) |
+| `last_crawled_at` | TIMESTAMPTZ | Last crawl timestamp |
+| `latest_llms_hash` | TEXT | SHA-256 hash of llms.txt content |
+| `latest_llms_url` | TEXT | Public URL of generated llms.txt |
+| `created_at` | TIMESTAMPTZ | Record creation time |
+| `updated_at` | TIMESTAMPTZ | Last update time |
+
+<Note>
+  The `idx_crawl_sites_due` index optimizes queries for finding sites that need recrawling based on `last_crawled_at` and `recrawl_interval_minutes`.
+</Note>
+
+## Cloudflare R2 Storage Setup
+
+Cloudflare R2 provides S3-compatible object storage for hosting generated `llms.txt` files.
+
+### Create R2 Bucket
+
+<Steps>
+  <Step title="Navigate to R2 Dashboard">
+    Log in to [dash.cloudflare.com](https://dash.cloudflare.com) → Select **R2** from sidebar.
+  </Step>
+  
+  <Step title="Purchase R2 (if needed)">
+    If first time using R2:
+    1. Click **"Purchase R2"**
+    2. Review pricing (free tier: 10GB storage, 1M Class A ops/month)
+    3. Click **"Get Started"**
+  </Step>
+  
+  <Step title="Create Bucket">
+    1. Click **"Create bucket"**
+    2. **Bucket name**: `llmstxt` (or your preferred name)
+    3. **Location**: Automatic (recommended)
+    4. Click **"Create bucket"**
+  </Step>
+  
+  <Step title="Enable Public Access">
+    1. Open your newly created bucket
+    2. Go to **Settings** tab
+    3. Under **Public access**, enable:
+       - **"Allow public access"**
+    4. Save changes
+  </Step>
+</Steps>
+
+<Warning>
+  Public access is required so that generated `llms.txt` files can be accessed via HTTP URLs. Files are not listed publicly, only accessible if you know the URL.
+</Warning>
+
+### Generate R2 API Token
+
+<Steps>
+  <Step title="Navigate to API Tokens">
+    In R2 dashboard, click **"Manage R2 API Tokens"** (top right).
+  </Step>
+  
+  <Step title="Create API Token">
+    1. Click **"Create API token"**
+    2. Configure token:
+       - **Token name**: `llmstxt-backend`
+       - **Permissions**: **Read & Write**
+       - **Bucket**: Select your bucket (`llmstxt`) or "Apply to all buckets"
+       - **TTL**: Leave empty (no expiration)
+    3. Click **"Create API Token"**
+  </Step>
+  
+  <Step title="Save Credentials">
+    Copy and save all three values (you won't see them again):
+
+    <CodeGroup>
+      ```bash Access Key ID
+      # R2_ACCESS_KEY
+      abc123def456ghi789jkl
+      ```
+
+      ```bash Secret Access Key
+      # R2_SECRET_KEY
+      aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890AbCd
+      ```
+
+      ```bash Endpoint URL
+      # R2_ENDPOINT
+      https://1234567890abcdef.r2.cloudflarestorage.com
+      ```
+    </CodeGroup>
+
+    <Warning>
+      The Secret Access Key is shown only once. Store it securely in a password manager.
+    </Warning>
+  </Step>
+</Steps>
+
+### Get Public R2 Domain
+
+<Steps>
+  <Step title="Return to Bucket Settings">
+    Navigate back to your bucket → **Settings** tab.
+  </Step>
+  
+  <Step title="Copy Public R2.dev Domain">
+    Under **Public access**, copy the **R2.dev subdomain**:
+    ```
+    https://pub-1234567890abcdef.r2.dev
+    ```
+    <Note>
+      This is your `R2_PUBLIC_DOMAIN` - files will be accessible at:
+      `https://pub-xxxxx.r2.dev/your-file.txt`
+    </Note>
+  </Step>
+</Steps>
+
+### Optional: Configure Custom Domain
+
+<Accordion title="Use your own domain for R2 bucket">
+  <Steps>
+    <Step title="Add Custom Domain">
+      In bucket settings → **Public access** → **Connect Custom Domain**:
+      1. Enter your domain: `files.yourdomain.com`
+      2. Cloudflare will provide DNS records to add
+    </Step>
+    
+    <Step title="Update DNS Records">
+      If domain is on Cloudflare:
+      - Records are added automatically
+      
+      If domain is elsewhere:
+      - Add CNAME record: `files.yourdomain.com` → `pub-xxxxx.r2.dev`
+    </Step>
+    
+    <Step title="Verify Configuration">
+      Wait for DNS propagation (up to 24 hours, usually minutes). Test:
+      ```bash
+      curl https://files.yourdomain.com
+      ```
+    </Step>
+    
+    <Step title="Update Terraform Variable">
+      Use custom domain in `terraform.tfvars`:
+      ```hcl
+      r2_public_domain = "https://files.yourdomain.com"
+      ```
+    </Step>
+  </Steps>
+</Accordion>
+
+## Test Storage Configuration
+
+### Upload Test File to R2
+
+Verify R2 credentials work correctly:
+
+```bash
+# Install AWS CLI (if not already installed)
+aws --version
+
+# Configure R2 endpoint
+aws configure set aws_access_key_id YOUR_R2_ACCESS_KEY
+aws configure set aws_secret_access_key YOUR_R2_SECRET_KEY
+
+# Test upload
+echo "Test file" > test.txt
+aws s3 cp test.txt s3://llmstxt/test.txt \
+  --endpoint-url YOUR_R2_ENDPOINT
+
+# Verify public access
+curl https://pub-xxxxx.r2.dev/test.txt
+# Expected: Test file
+```
+
+<Check>
+  If you can access the file via the public URL, R2 is configured correctly!
+</Check>
+
+### Test Supabase Connection
+
+Verify Supabase credentials with a simple query:
+
+```bash
+# Using curl
+curl -X GET "https://YOUR_PROJECT.supabase.co/rest/v1/crawl_sites" \
+  -H "apikey: YOUR_SUPABASE_KEY" \
+  -H "Authorization: Bearer YOUR_SUPABASE_KEY"
+
+# Expected: []
+# (empty array since no sites are added yet)
+```
+
+## Credentials Summary
+
+Before proceeding to Terraform, ensure you have all these values:
+
+<AccordionGroup>
+  <Accordion title="Supabase Configuration">
+    ```bash
+    SUPABASE_URL=https://xxxxx.supabase.co
+    SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    ```
+  </Accordion>
+
+  <Accordion title="Cloudflare R2 Configuration">
+    ```bash
+    R2_ENDPOINT=https://xxxxx.r2.cloudflarestorage.com
+    R2_ACCESS_KEY=abc123def456
+    R2_SECRET_KEY=aBcDeFgHiJkLmNoPqRs
+    R2_BUCKET=llmstxt
+    R2_PUBLIC_DOMAIN=https://pub-xxxxx.r2.dev
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Data Privacy Considerations
+
+<Warning>
+  **Public Data**: Files stored in R2 with public access enabled are accessible to anyone with the URL. Do not store sensitive data.
+</Warning>
+
+- Generated `llms.txt` files are intentionally public (that's their purpose)
+- Database records in Supabase are private (protected by row-level security)
+- URLs in R2 are not guessable (contain random hashes)
+- Consider implementing URL signing for additional security
+
+## Next Steps
+
+<Card title="Terraform Configuration" icon="code" href="/deployment/terraform">
+  Configure Terraform variables and deploy AWS infrastructure
+</Card>

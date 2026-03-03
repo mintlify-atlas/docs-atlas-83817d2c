@@ -1,0 +1,495 @@
+---
+title: 'Database'
+description: 'Supabase database operations for site tracking and scheduling'
+icon: 'table'
+---
+
+The database module handles all Supabase interactions for the llms.txt Generator. It manages site metadata, crawl scheduling, content change detection, and recrawl timing optimization.
+
+## Overview
+
+The database module provides functions for:
+
+- Storing crawl metadata and results
+- Tracking content changes and recrawl intervals
+- Finding sites due for recrawling
+- Adaptive scheduling based on content change frequency
+- Sitemap lastmod tracking
+
+## Data Models
+
+### CrawlSite
+
+Data class representing a tracked site in the database.
+
+```python
+@dataclass
+class CrawlSite:
+    id: str
+    base_url: str
+    recrawl_interval_minutes: int
+    max_pages: int
+    desc_length: int
+    last_crawled_at: datetime | None
+    latest_llms_hash: str | None
+    latest_llms_url: str | None
+    next_crawl_at: datetime | None
+    last_changed_at: datetime | None
+    sentinel_url: str | None
+    sitemap_newest_lastmod: datetime | None
+    avg_change_interval_minutes: float | None
+    webhook_secret: str | None
+```
+
+<ParamField path="id" type="str" required>
+  Unique site identifier (UUID)
+</ParamField>
+
+<ParamField path="base_url" type="str" required>
+  Base URL of the tracked site
+</ParamField>
+
+<ParamField path="recrawl_interval_minutes" type="int" required>
+  Configured recrawl interval in minutes
+</ParamField>
+
+<ParamField path="max_pages" type="int" required>
+  Maximum pages to crawl per run
+</ParamField>
+
+<ParamField path="desc_length" type="int" required>
+  Maximum description/snippet length
+</ParamField>
+
+<ParamField path="last_crawled_at" type="datetime | None">
+  Timestamp of last crawl attempt
+</ParamField>
+
+<ParamField path="latest_llms_hash" type="str | None">
+  MD5 hash of latest llms.txt content
+</ParamField>
+
+<ParamField path="latest_llms_url" type="str | None">
+  Public URL of latest llms.txt file
+</ParamField>
+
+<ParamField path="next_crawl_at" type="datetime | None">
+  Scheduled time for next crawl
+</ParamField>
+
+<ParamField path="last_changed_at" type="datetime | None">
+  Timestamp when content last changed
+</ParamField>
+
+<ParamField path="sentinel_url" type="str | None">
+  URL to check for quick change detection
+</ParamField>
+
+<ParamField path="sitemap_newest_lastmod" type="datetime | None">
+  Most recent lastmod from sitemap entries
+</ParamField>
+
+<ParamField path="avg_change_interval_minutes" type="float | None">
+  Calculated average time between content changes
+</ParamField>
+
+<ParamField path="webhook_secret" type="str | None">
+  Secret for webhook-triggered crawls
+</ParamField>
+
+## Functions
+
+### get_supabase_client()
+
+Creates and returns a Supabase client instance.
+
+```python
+def get_supabase_client() -> Client | None
+```
+
+<ResponseField name="client" type="Client | None">
+  Supabase client instance, or None if credentials not configured
+</ResponseField>
+
+**Configuration:**
+
+Requires `settings.supabase_url` and `settings.supabase_key` to be set.
+
+### save_site_metadata()
+
+Saves or updates site metadata after a crawl with content changes.
+
+```python
+async def save_site_metadata(
+    base_url: str,
+    recrawl_interval_minutes: int,
+    max_pages: int,
+    desc_length: int,
+    latest_llms_hash: str,
+    latest_llms_url: str,
+    sentinel_url: str | None = None
+) -> bool
+```
+
+<ParamField path="base_url" type="str" required>
+  Site base URL (used as unique key)
+</ParamField>
+
+<ParamField path="recrawl_interval_minutes" type="int" required>
+  Recrawl interval in minutes
+</ParamField>
+
+<ParamField path="max_pages" type="int" required>
+  Maximum pages to crawl
+</ParamField>
+
+<ParamField path="desc_length" type="int" required>
+  Description length setting
+</ParamField>
+
+<ParamField path="latest_llms_hash" type="str" required>
+  MD5 hash of the llms.txt content
+</ParamField>
+
+<ParamField path="latest_llms_url" type="str" required>
+  Public URL of uploaded llms.txt
+</ParamField>
+
+<ParamField path="sentinel_url" type="str | None" default="None">
+  Optional sentinel URL (defaults to base_url)
+</ParamField>
+
+<ResponseField name="success" type="bool">
+  True if save succeeded, False otherwise
+</ResponseField>
+
+**Behavior:**
+
+- Uses upsert with `base_url` as conflict key
+- Sets `last_crawled_at` and `last_changed_at` to current time
+- Calculates `next_crawl_at` by adding recrawl interval
+- Initializes `avg_change_interval_minutes` to recrawl interval
+- Sets `sentinel_url` to base_url if not provided
+
+### get_due_sites()
+
+Retrieves all sites that are due for recrawling.
+
+```python
+async def get_due_sites() -> list[CrawlSite]
+```
+
+<ResponseField name="sites" type="list[CrawlSite]">
+  List of sites where `next_crawl_at` is in the past
+</ResponseField>
+
+**Query:**
+
+```python
+client.table("crawl_sites") \
+    .select("*") \
+    .lte("next_crawl_at", now.isoformat()) \
+    .execute()
+```
+
+**Use Case:**
+
+Called by scheduler/cron to find sites needing recrawl.
+
+### update_scheduling_only()
+
+Updates scheduling metadata without changing content fields (used when content hasn't changed).
+
+```python
+async def update_scheduling_only(
+    site_id: str,
+    next_crawl_at: datetime,
+    sitemap_newest_lastmod: datetime | None
+) -> bool
+```
+
+<ParamField path="site_id" type="str" required>
+  Site ID to update
+</ParamField>
+
+<ParamField path="next_crawl_at" type="datetime" required>
+  Scheduled time for next crawl
+</ParamField>
+
+<ParamField path="sitemap_newest_lastmod" type="datetime | None" required>
+  Latest lastmod from sitemap (if available)
+</ParamField>
+
+<ResponseField name="success" type="bool">
+  True if update succeeded, False otherwise
+</ResponseField>
+
+**Updates:**
+
+- `last_crawled_at` → current time
+- `next_crawl_at` → provided value
+- `sitemap_newest_lastmod` → provided value (if not None)
+- `updated_at` → current time
+
+**Does NOT update:**
+
+- `latest_llms_hash`
+- `latest_llms_url`
+- `last_changed_at`
+- `avg_change_interval_minutes`
+
+### update_crawl_result()
+
+Updates site metadata after a crawl with content changes.
+
+```python
+async def update_crawl_result(
+    site_id: str,
+    new_hash: str,
+    hosted_url: str,
+    next_crawl_at: datetime,
+    last_changed_at: datetime | None,
+    sitemap_newest_lastmod: datetime | None,
+    avg_change_interval_minutes: float | None
+) -> bool
+```
+
+<ParamField path="site_id" type="str" required>
+  Site ID to update
+</ParamField>
+
+<ParamField path="new_hash" type="str" required>
+  New llms.txt content hash
+</ParamField>
+
+<ParamField path="hosted_url" type="str" required>
+  Public URL of new llms.txt file
+</ParamField>
+
+<ParamField path="next_crawl_at" type="datetime" required>
+  Scheduled time for next crawl
+</ParamField>
+
+<ParamField path="last_changed_at" type="datetime | None" required>
+  When content changed (usually current time)
+</ParamField>
+
+<ParamField path="sitemap_newest_lastmod" type="datetime | None" required>
+  Latest lastmod from sitemap
+</ParamField>
+
+<ParamField path="avg_change_interval_minutes" type="float | None" required>
+  Calculated average change interval
+</ParamField>
+
+<ResponseField name="success" type="bool">
+  True if update succeeded, False otherwise
+</ResponseField>
+
+**Updates:**
+
+- `last_crawled_at` → current time
+- `next_crawl_at` → provided value
+- `last_changed_at` → provided value
+- `avg_change_interval_minutes` → provided value
+- `latest_llms_hash` → new hash
+- `latest_llms_url` → new URL
+- `sitemap_newest_lastmod` → provided value (if not None)
+- `updated_at` → current time
+
+## Usage Examples
+
+### Initial Site Crawl
+
+```python
+from backend.database import save_site_metadata
+from backend.crawler import LLMCrawler
+from backend.formatter import format_llms_txt
+from backend.storage import save_llms_txt
+import hashlib
+
+# Crawl site
+crawler = LLMCrawler(
+    base_url="https://example.com",
+    max_pages=50,
+    desc_length=150,
+    log_callback=log
+)
+pages = await crawler.run()
+
+# Format and upload
+content = format_llms_txt("https://example.com", pages)
+public_url = await save_llms_txt("https://example.com", content, log)
+
+# Save metadata
+content_hash = hashlib.md5(content.encode()).hexdigest()
+
+success = await save_site_metadata(
+    base_url="https://example.com",
+    recrawl_interval_minutes=1440,  # 24 hours
+    max_pages=50,
+    desc_length=150,
+    latest_llms_hash=content_hash,
+    latest_llms_url=public_url,
+    sentinel_url="https://example.com/sitemap.xml"
+)
+
+if success:
+    print("Site metadata saved")
+```
+
+### Scheduled Recrawl
+
+```python
+from backend.database import get_due_sites, update_scheduling_only, update_crawl_result
+from datetime import datetime, timezone, timedelta
+import hashlib
+
+# Find sites due for crawl
+due_sites = await get_due_sites()
+
+for site in due_sites:
+    # Crawl site
+    crawler = LLMCrawler(
+        base_url=site.base_url,
+        max_pages=site.max_pages,
+        desc_length=site.desc_length,
+        log_callback=log
+    )
+    pages = await crawler.run()
+    
+    # Format and check for changes
+    content = format_llms_txt(site.base_url, pages)
+    new_hash = hashlib.md5(content.encode()).hexdigest()
+    
+    next_crawl = datetime.now(timezone.utc) + timedelta(minutes=site.recrawl_interval_minutes)
+    
+    if new_hash != site.latest_llms_hash:
+        # Content changed - upload and update
+        public_url = await save_llms_txt(site.base_url, content, log)
+        
+        await update_crawl_result(
+            site_id=site.id,
+            new_hash=new_hash,
+            hosted_url=public_url,
+            next_crawl_at=next_crawl,
+            last_changed_at=datetime.now(timezone.utc),
+            sitemap_newest_lastmod=None,
+            avg_change_interval_minutes=float(site.recrawl_interval_minutes)
+        )
+    else:
+        # No changes - just update scheduling
+        await update_scheduling_only(
+            site_id=site.id,
+            next_crawl_at=next_crawl,
+            sitemap_newest_lastmod=None
+        )
+```
+
+### Adaptive Scheduling
+
+```python
+from datetime import datetime, timezone, timedelta
+
+# Calculate average change interval
+if site.last_changed_at and site.last_crawled_at:
+    time_since_change = datetime.now(timezone.utc) - site.last_changed_at
+    change_interval = time_since_change.total_seconds() / 60
+    
+    # Exponential moving average
+    if site.avg_change_interval_minutes:
+        avg_change = 0.7 * site.avg_change_interval_minutes + 0.3 * change_interval
+    else:
+        avg_change = change_interval
+    
+    # Schedule next crawl based on average
+    next_crawl = datetime.now(timezone.utc) + timedelta(minutes=avg_change * 0.8)
+    
+    await update_crawl_result(
+        site_id=site.id,
+        new_hash=new_hash,
+        hosted_url=public_url,
+        next_crawl_at=next_crawl,
+        last_changed_at=datetime.now(timezone.utc),
+        sitemap_newest_lastmod=None,
+        avg_change_interval_minutes=avg_change
+    )
+```
+
+### Sitemap-Based Scheduling
+
+```python
+from xml.etree import ElementTree as ET
+import httpx
+from datetime import datetime
+
+async def get_sitemap_lastmod(sitemap_url: str) -> datetime | None:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(sitemap_url)
+        if resp.status_code != 200:
+            return None
+        
+        root = ET.fromstring(resp.text)
+        lastmods = root.findall(".//{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod")
+        
+        if not lastmods:
+            return None
+        
+        dates = [datetime.fromisoformat(lm.text.replace('Z', '+00:00')) for lm in lastmods]
+        return max(dates)
+
+# Check sitemap for changes
+if site.sentinel_url and 'sitemap' in site.sentinel_url:
+    newest_lastmod = await get_sitemap_lastmod(site.sentinel_url)
+    
+    if newest_lastmod and newest_lastmod == site.sitemap_newest_lastmod:
+        # Sitemap unchanged - skip crawl
+        next_crawl = datetime.now(timezone.utc) + timedelta(minutes=site.recrawl_interval_minutes)
+        await update_scheduling_only(
+            site_id=site.id,
+            next_crawl_at=next_crawl,
+            sitemap_newest_lastmod=newest_lastmod
+        )
+        continue
+```
+
+## Database Schema
+
+The `crawl_sites` table structure:
+
+```sql
+CREATE TABLE crawl_sites (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    base_url TEXT UNIQUE NOT NULL,
+    recrawl_interval_minutes INTEGER NOT NULL,
+    max_pages INTEGER NOT NULL,
+    desc_length INTEGER NOT NULL,
+    last_crawled_at TIMESTAMPTZ,
+    latest_llms_hash TEXT,
+    latest_llms_url TEXT,
+    next_crawl_at TIMESTAMPTZ,
+    last_changed_at TIMESTAMPTZ,
+    sentinel_url TEXT,
+    sitemap_newest_lastmod TIMESTAMPTZ,
+    avg_change_interval_minutes DOUBLE PRECISION,
+    webhook_secret TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_next_crawl ON crawl_sites(next_crawl_at);
+```
+
+## Related Modules
+
+- **storage** - Provides public URLs stored in `latest_llms_url`
+- **crawler** - Uses settings from `CrawlSite` for recrawls
+- **config** - Provides Supabase credentials
+
+## Notes
+
+- All datetime values use UTC timezone
+- Upsert uses `base_url` as unique constraint
+- Returns False on error instead of raising exceptions
+- Client creation is lazy (only when needed)
+- All database operations are gracefully skipped if Supabase not configured

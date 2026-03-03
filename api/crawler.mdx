@@ -1,0 +1,220 @@
+---
+title: 'Crawler'
+description: 'LLMCrawler class for crawling websites and extracting content'
+icon: 'spider'
+---
+
+The crawler module provides the core crawling functionality for the llms.txt Generator. It handles webpage fetching, content extraction, and intelligent fallback between httpx and Bright Data Scraping Browser.
+
+## Overview
+
+The `LLMCrawler` class crawls websites starting from a base URL, extracting meaningful content from each page. It supports:
+
+- Sitemap-based crawling (tries `/sitemap.xml` and `/sitemap_index.xml`)
+- Breadth-first search (BFS) fallback when no sitemap exists
+- Dual-fetching strategy: httpx → Bright Data Scraping Browser
+- Content validation to detect blocked/empty responses
+- Configurable page limits and description lengths
+
+## Classes
+
+### PageInfo
+
+Data class representing extracted information from a single page.
+
+<ParamField path="url" type="str" required>
+  The full URL of the page
+</ParamField>
+
+<ParamField path="title" type="str" required>
+  Extracted page title (from `<title>` or `<h1>`)
+</ParamField>
+
+<ParamField path="description" type="str" required>
+  Page description (from meta tags or content)
+</ParamField>
+
+<ParamField path="snippet" type="str" required>
+  Truncated text snippet from page content
+</ParamField>
+
+### LLMCrawler
+
+Main crawler class that orchestrates the crawling process.
+
+#### Constructor
+
+```python
+LLMCrawler(
+    base_url: str,
+    max_pages: int,
+    desc_length: int,
+    log_callback: Callable,
+    brightdata_api_key: str | None = None,
+    brightdata_enabled: bool = True,
+    brightdata_zone: str = "scraping_browser1",
+    brightdata_password: str | None = None
+)
+```
+
+<ParamField path="base_url" type="str" required>
+  The starting URL to crawl (will be normalized)
+</ParamField>
+
+<ParamField path="max_pages" type="int" required>
+  Maximum number of pages to crawl
+</ParamField>
+
+<ParamField path="desc_length" type="int" required>
+  Maximum length for generated snippets
+</ParamField>
+
+<ParamField path="log_callback" type="Callable" required>
+  Async function for logging progress (receives string messages)
+</ParamField>
+
+<ParamField path="brightdata_api_key" type="str | None" default="None">
+  API key for Bright Data Scraping Browser
+</ParamField>
+
+<ParamField path="brightdata_enabled" type="bool" default="True">
+  Whether to enable Bright Data fallback
+</ParamField>
+
+<ParamField path="brightdata_zone" type="str" default="scraping_browser1">
+  Bright Data zone to use
+</ParamField>
+
+<ParamField path="brightdata_password" type="str | None" default="None">
+  Optional password for Bright Data authentication
+</ParamField>
+
+#### Methods
+
+##### run()
+
+Executes the crawl and returns extracted page information.
+
+```python
+async def run() -> list[PageInfo]
+```
+
+<ResponseField name="pages" type="list[PageInfo]">
+  List of successfully crawled pages with extracted content
+</ResponseField>
+
+**Behavior:**
+
+1. Attempts to load sitemap (`/sitemap.xml` or `/sitemap_index.xml`)
+2. If sitemap exists, uses those URLs; otherwise performs BFS crawl
+3. For each URL:
+   - First tries httpx (fast)
+   - Validates content for meaningful data
+   - Falls back to Bright Data if needed
+   - Extracts title, description, and text
+   - Discovers and queues new links
+4. Stops when `max_pages` reached or queue exhausted
+5. Attempts up to `max_pages * 3` URLs to handle failures
+6. Logs usage stats if Bright Data was used
+
+## Usage Examples
+
+### Basic Crawl
+
+```python
+from backend.crawler import LLMCrawler
+
+async def log(msg: str):
+    print(msg)
+
+# Create crawler
+crawler = LLMCrawler(
+    base_url="https://example.com",
+    max_pages=20,
+    desc_length=150,
+    log_callback=log
+)
+
+# Run the crawl
+pages = await crawler.run()
+
+for page in pages:
+    print(f"{page.title}: {page.url}")
+    print(f"  {page.snippet}")
+```
+
+### With Bright Data Fallback
+
+```python
+crawler = LLMCrawler(
+    base_url="https://example.com",
+    max_pages=50,
+    desc_length=200,
+    log_callback=log,
+    brightdata_api_key="your_api_key_here",
+    brightdata_enabled=True
+)
+
+pages = await crawler.run()
+
+# Check logs for Bright Data usage stats:
+# "Scraping Browser usage: 5 requests, 4 successful (80%), ~$0.05 estimated cost"
+```
+
+### Sitemap-First Crawl
+
+```python
+# If site has /sitemap.xml, crawler will use it automatically
+crawler = LLMCrawler(
+    base_url="https://docs.example.com",
+    max_pages=100,
+    desc_length=250,
+    log_callback=log
+)
+
+pages = await crawler.run()
+
+# Logs will show:
+# "Using sitemap: found 150 URLs"
+# Then crawls up to max_pages from those URLs
+```
+
+## Fetching Strategy
+
+The crawler uses a two-tier fetching strategy:
+
+### Tier 1: httpx (Fast)
+
+- Uses standard HTTP client with 10s timeout
+- Follows redirects automatically
+- Validates response has meaningful content
+- Most cost-effective approach
+
+### Tier 2: Bright Data Scraping Browser (Reliable)
+
+- Triggered when httpx fails or returns empty content
+- Executes JavaScript, handles anti-bot measures
+- More expensive but handles difficult sites
+- Usage tracked and reported at end of crawl
+
+### Content Validation
+
+The `has_meaningful_content()` function checks for:
+- Non-empty body content
+- Absence of common blocking indicators
+- Minimum content threshold
+
+## Related Modules
+
+- **scout** - URL normalization, link extraction, sitemap parsing
+- **text** - Title/description/text extraction and snippet creation
+- **scraping_browser_client** - Bright Data Scraping Browser integration
+- **state** - Crawl state management (queue, visited set)
+
+## Notes
+
+- All URLs are normalized before processing
+- Visited tracking prevents duplicate crawls
+- Queue implements BFS traversal
+- Graceful degradation: continues even if some pages fail
+- Warning logged if fewer pages found than requested

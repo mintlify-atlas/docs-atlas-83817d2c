@@ -1,0 +1,334 @@
+---
+title: 'Intelligent Crawling'
+description: 'BFS traversal with automatic sitemap discovery, depth control, and smart content detection'
+icon: 'spider-web'
+---
+
+## Overview
+
+The llms.txt Generator uses an intelligent crawling system that automatically discovers and extracts content from websites. The crawler employs a breadth-first search (BFS) algorithm with sitemap support, configurable limits, and fallback mechanisms for JavaScript-heavy sites.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Sitemap Discovery" icon="sitemap">
+    Automatically detects and parses XML sitemaps for efficient crawling
+  </Card>
+  <Card title="BFS Traversal" icon="diagram-project">
+    Breadth-first search ensures comprehensive coverage of site structure
+  </Card>
+  <Card title="Smart Filtering" icon="filter">
+    Skips irrelevant pages (admin, API, media files) automatically
+  </Card>
+  <Card title="Content Detection" icon="magnifying-glass">
+    Validates meaningful content and escalates to browser rendering when needed
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Sitemap Check">
+    The crawler first attempts to locate a sitemap at `/sitemap.xml` or `/sitemap_index.xml`:
+
+    ```python backend/crawler/llm_crawler.py
+    async def _try_sitemap(self, client: httpx.AsyncClient) -> list[str]:
+        for path in ['/sitemap.xml', '/sitemap_index.xml']:
+            try:
+                resp = await client.get(f"{self.state.base_url}{path}")
+                if resp.status_code == 200:
+                    return parse_sitemap(resp.text, self.state.base_url)
+            except:
+                continue
+        return []
+    ```
+
+    If found, URLs are extracted and filtered to match the base domain.
+  </Step>
+
+  <Step title="Queue Initialization">
+    URLs are loaded into a queue for processing:
+
+    ```python backend/crawler/llm_crawler.py
+    sitemap_urls = await self._try_sitemap(client)
+    if sitemap_urls:
+        await self.log(f"Using sitemap: found {len(sitemap_urls)} URLs")
+        self.state.queue.clear()
+        self.state.queue.append(self.state.base_url)
+        for url in sitemap_urls[:max_attempts]:
+            if url != self.state.base_url:
+                self.state.queue.append(url)
+    else:
+        await self.log("No sitemap found, using BFS crawl")
+    ```
+  </Step>
+
+  <Step title="BFS Crawling">
+    Pages are visited in breadth-first order until limits are reached:
+
+    ```python backend/crawler/llm_crawler.py
+    while (self.state.queue and
+           len(pages) < self.state.max_pages and
+           attempts < max_attempts):
+        attempts += 1
+        url = self.state.queue.popleft()
+
+        if url in self.state.visited:
+            continue
+
+        # Fetch and parse page
+        html = await self._fetch_page(url)
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Extract content
+        title = extract_title(soup)
+        description = extract_description(soup)
+        text = extract_text(soup)
+        snippet = create_snippet(text, self.desc_length)
+
+        pages.append(PageInfo(
+            url=url,
+            title=title,
+            description=description,
+            snippet=snippet
+        ))
+
+        self.state.visited.add(url)
+
+        # Discover new links
+        links = extract_links(html, url)
+        for link in links:
+            if link not in self.state.visited:
+                self.state.queue.append(link)
+    ```
+  </Step>
+
+  <Step title="Link Discovery">
+    Each page is parsed to extract internal links:
+
+    ```python backend/crawler/scout.py
+    def extract_links(html: str, base_url: str) -> list[str]:
+        soup = BeautifulSoup(html, 'html.parser')
+        links = []
+
+        for tag in soup.find_all('a', href=True):
+            href = tag['href']
+            absolute_url = urljoin(base_url, href)
+            normalized = normalize_url(absolute_url)
+
+            if same_domain(normalized, base_url) and not should_skip(normalized):
+                links.append(normalized)
+
+        return list(set(links))
+    ```
+  </Step>
+</Steps>
+
+## Smart Filtering
+
+The crawler automatically skips irrelevant URLs using pattern matching:
+
+```python backend/crawler/scout.py
+SKIP_PATTERNS = [
+    '/logout', '/login', '/admin', '/api/', '/jobs/', '/sitemap',
+    '/_metadata', '.pdf', '.zip', '.jpg', '.png', '.gif', '.xml',
+    '/feed', '/rss', '.atom'
+]
+
+def should_skip(url: str) -> bool:
+    parsed = urlparse(url)
+    # Skip URLs with long query strings
+    if parsed.query and len(parsed.query) > 50:
+        return True
+    return any(pattern in url for pattern in SKIP_PATTERNS)
+```
+
+<Info>
+  **Why filter?** Skipping administrative pages, media files, and API endpoints ensures the crawler focuses on human-readable content that's relevant for LLM indexing.
+</Info>
+
+## Content Detection
+
+The crawler validates that fetched pages contain meaningful content:
+
+```python backend/crawler/llm_crawler.py
+try:
+    await self.log(f"  → Trying httpx...")
+    response = await client.get(url)
+    response.raise_for_status()
+    httpx_html = response.text
+
+    if has_meaningful_content(httpx_html):
+        await self.log(f"  ✓ httpx succeeded")
+        html = httpx_html
+    else:
+        await self.log(f"  ✗ httpx returned empty/blocked content")
+except Exception as httpx_error:
+    await self.log(f"  ✗ httpx failed: {str(httpx_error)}")
+
+# Escalate to Bright Data if needed
+if html is None and self.brightdata_client is not None:
+    await self.log(f"  → Escalating to Bright Data Scraping Browser...")
+    html = await self.brightdata_client.fetch(url)
+```
+
+<Note>
+  For JavaScript-heavy sites that return empty content, the crawler automatically escalates to Bright Data's Scraping Browser with full browser rendering.
+</Note>
+
+## Configuration
+
+Crawl behavior can be customized via WebSocket parameters:
+
+<ParamField path="maxPages" type="integer" default="50">
+  Maximum number of pages to crawl before stopping
+</ParamField>
+
+<ParamField path="descLength" type="integer" default="500">
+  Character limit for page descriptions/snippets
+</ParamField>
+
+<ParamField path="useBrightdata" type="boolean" default="true">
+  Enable Bright Data Scraping Browser for JavaScript-heavy sites
+</ParamField>
+
+## Example Usage
+
+<CodeGroup>
+```javascript WebSocket Client
+const ws = new WebSocket('wss://api.llmstxt.cloud/ws/crawl?token=YOUR_TOKEN');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    url: 'https://example.com',
+    maxPages: 100,
+    descLength: 500,
+    useBrightdata: true
+  }));
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  
+  if (message.type === 'log') {
+    console.log(message.content);
+    // "Using sitemap: found 234 URLs"
+    // "Visiting: https://example.com/docs"
+    // "✓ httpx succeeded"
+  }
+};
+```
+
+```python Python Client
+import asyncio
+import websockets
+import json
+
+async def crawl_site():
+    uri = "wss://api.llmstxt.cloud/ws/crawl?token=YOUR_TOKEN"
+    
+    async with websockets.connect(uri) as websocket:
+        await websocket.send(json.dumps({
+            "url": "https://example.com",
+            "maxPages": 100,
+            "descLength": 500,
+            "useBrightdata": True
+        }))
+        
+        async for message in websocket:
+            data = json.loads(message)
+            if data["type"] == "log":
+                print(data["content"])
+
+asyncio.run(crawl_site())
+```
+</CodeGroup>
+
+## Crawl State Management
+
+The crawler maintains state to prevent duplicate visits:
+
+```python backend/crawler/state.py
+from dataclasses import dataclass, field
+from collections import deque
+from typing import Set, Deque
+
+@dataclass
+class CrawlState:
+    base_url: str
+    max_pages: int
+    visited: Set[str] = field(default_factory=set)
+    queue: Deque[str] = field(default_factory=deque)
+```
+
+- **`visited`**: Set of already-crawled URLs (prevents loops)
+- **`queue`**: Deque for BFS ordering (FIFO)
+- **`base_url`**: Root domain for same-domain filtering
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Sitemap Mode" icon="gauge-high">
+    - **Speed**: Fast (parallel sitemap parsing)
+    - **Coverage**: Complete (all sitemap URLs)
+    - **Best for**: Large sites with comprehensive sitemaps
+  </Card>
+  <Card title="BFS Mode" icon="gauge">
+    - **Speed**: Moderate (sequential page crawling)
+    - **Coverage**: Limited by max_pages
+    - **Best for**: Small sites or those without sitemaps
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Set appropriate page limits">
+    Start with 50 pages for small sites, increase to 200-500 for larger documentation sites. Very high limits (>1000) may time out.
+  </Accordion>
+
+  <Accordion title="Use sitemap hints">
+    If you know a site has a sitemap, the crawler will automatically find it. For sitemap indexes, all child sitemaps are parsed recursively.
+  </Accordion>
+
+  <Accordion title="Enable Bright Data for SPAs">
+    Single-page applications (React, Vue, Angular) require JavaScript rendering. Set `useBrightdata: true` for these sites.
+  </Accordion>
+
+  <Accordion title="Monitor crawl logs">
+    Watch for `✗ httpx returned empty/blocked content` messages - these indicate pages that need browser rendering.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Crawler only finds a few pages">
+    **Cause**: Site may block the user agent or require JavaScript rendering.
+    
+    **Solution**: Enable `useBrightdata: true` to use browser-based crawling.
+  </Accordion>
+
+  <Accordion title="Crawl times out before reaching maxPages">
+    **Cause**: Each page takes time to fetch and parse. Very high page counts may exceed WebSocket timeout.
+    
+    **Solution**: Reduce `maxPages` or increase timeout in your WebSocket client.
+  </Accordion>
+
+  <Accordion title="Wrong pages are being crawled">
+    **Cause**: BFS discovers links from navigation/footer that aren't relevant.
+    
+    **Solution**: The skip patterns filter most issues. For additional filtering, consider adjusting `SKIP_PATTERNS` in `crawler/scout.py`.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Real-time Streaming" icon="signal-stream" href="/features/real-time-streaming">
+    Learn how crawl progress is streamed live via WebSocket
+  </Card>
+  <Card title="LLM Enhancement" icon="sparkles" href="/features/llm-enhancement">
+    Enhance crawled content with AI-powered optimization
+  </Card>
+</CardGroup>

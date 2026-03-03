@@ -1,0 +1,261 @@
+---
+title: 'Storage'
+description: 'R2 storage functions for uploading llms.txt files'
+icon: 'database'
+---
+
+The storage module handles uploading generated llms.txt files to Cloudflare R2 (S3-compatible object storage). It uses boto3 for S3 API compatibility and generates deterministic filenames based on URL hashing.
+
+## Overview
+
+The storage module provides a single async function for saving llms.txt content to R2:
+
+- MD5-based filename generation for consistent paths
+- S3-compatible upload using boto3
+- Public URL generation with custom domain support
+- Graceful handling when storage is not configured
+
+## Configuration
+
+Storage requires the following environment variables (from `config.settings`):
+
+- `r2_endpoint` - R2 endpoint URL
+- `r2_access_key` - R2 access key ID
+- `r2_secret_key` - R2 secret access key
+- `r2_bucket` - Target bucket name
+- `r2_public_domain` - Optional custom domain for public URLs
+
+## Functions
+
+### save_llms_txt()
+
+Saves llms.txt content to R2 storage and returns the public URL.
+
+```python
+async def save_llms_txt(
+    base_url: str,
+    content: str,
+    log: Callable
+) -> str | None
+```
+
+<ParamField path="base_url" type="str" required>
+  The base URL of the crawled site (used for filename generation)
+</ParamField>
+
+<ParamField path="content" type="str" required>
+  The formatted llms.txt content to upload
+</ParamField>
+
+<ParamField path="log" type="Callable" required>
+  Logging function (sync or async) that accepts string messages
+</ParamField>
+
+<ResponseField name="public_url" type="str | None">
+  Public URL of the uploaded file, or None if upload failed or storage not configured
+</ResponseField>
+
+**Behavior:**
+
+1. Checks if all required R2 settings are configured
+2. If not configured, logs message and returns None
+3. Creates boto3 S3 client with R2 credentials
+4. Generates MD5 hash of base URL for deterministic filename
+5. Uploads content with `text/markdown` content type
+6. Constructs public URL using custom domain or endpoint
+7. Logs upload success with URL
+8. Returns public URL on success, None on error
+
+**Object Key Format:**
+
+```
+llms/<md5_hash>.txt
+```
+
+Where `<md5_hash>` is the MD5 hash of the base URL.
+
+## Usage Examples
+
+### Basic Upload
+
+```python
+from backend.storage import save_llms_txt
+
+async def log(msg: str):
+    print(msg)
+
+base_url = "https://example.com"
+content = "# Example Site\n\n> Description\n\n## Docs\n..."
+
+public_url = await save_llms_txt(base_url, content, log)
+
+if public_url:
+    print(f"Uploaded to: {public_url}")
+else:
+    print("Upload failed or storage not configured")
+```
+
+### Integration with Crawler and Formatter
+
+```python
+from backend.crawler import LLMCrawler
+from backend.formatter import format_llms_txt, get_md_url_map
+from backend.storage import save_llms_txt
+
+async def log(msg: str):
+    print(msg)
+
+# Crawl site
+crawler = LLMCrawler(
+    base_url="https://docs.example.com",
+    max_pages=50,
+    desc_length=150,
+    log_callback=log
+)
+
+pages = await crawler.run()
+
+# Format output
+md_url_map = await get_md_url_map(pages)
+llms_content = format_llms_txt(
+    base_url="https://docs.example.com",
+    pages=pages,
+    md_url_map=md_url_map
+)
+
+# Upload to R2
+public_url = await save_llms_txt(
+    base_url="https://docs.example.com",
+    content=llms_content,
+    log=log
+)
+
+if public_url:
+    await log(f"✓ llms.txt available at: {public_url}")
+```
+
+### Without Storage Configured
+
+```python
+# If R2 credentials are not set in environment
+public_url = await save_llms_txt(base_url, content, log)
+
+# Logs: "Storage not configured, skipping upload"
+# Returns: None
+```
+
+### Error Handling
+
+```python
+from botocore.exceptions import ClientError
+
+public_url = await save_llms_txt(base_url, content, log)
+
+if public_url is None:
+    # Either not configured or upload failed
+    # Check logs for error details
+    await log("Failed to upload - check R2 credentials")
+else:
+    # Success
+    await log(f"Upload successful: {public_url}")
+```
+
+## Public URL Generation
+
+The function generates public URLs in two ways:
+
+### With Custom Domain
+
+If `settings.r2_public_domain` is set:
+
+```python
+public_url = f"{settings.r2_public_domain}/{object_key}"
+# Example: https://cdn.example.com/llms/5d41402abc4b2a76b9719d911017c592.txt
+```
+
+### Without Custom Domain
+
+Falls back to R2 endpoint:
+
+```python
+public_url = f"{settings.r2_endpoint}/{settings.r2_bucket}/{object_key}"
+# Example: https://r2.example.com/mybucket/llms/5d41402abc4b2a76b9719d911017c592.txt
+```
+
+## Filename Determinism
+
+The MD5 hash ensures consistent filenames for the same base URL:
+
+```python
+import hashlib
+
+base_url = "https://example.com"
+url_hash = hashlib.md5(base_url.encode()).hexdigest()
+object_key = f"llms/{url_hash}.txt"
+
+# Same base_url always produces same object_key
+# This allows overwriting previous versions automatically
+```
+
+**Benefits:**
+
+- No need to track or delete old files
+- Recrawls automatically update the same file
+- Predictable URLs for integration
+
+## Content Type
+
+Files are uploaded with `Content-Type: text/markdown`:
+
+```python
+s3_client.put_object(
+    Bucket=settings.r2_bucket,
+    Key=object_key,
+    Body=content.encode(),
+    ContentType='text/markdown'  # Enables proper rendering
+)
+```
+
+This ensures browsers and LLM tools recognize the content as markdown.
+
+## Error Handling
+
+The function handles errors gracefully:
+
+```python
+try:
+    # Upload logic
+    return public_url
+except ClientError as e:
+    log(f"Storage error: {str(e)}")
+    return None
+```
+
+**Common Errors:**
+
+- Invalid credentials → `ClientError`
+- Network timeout → `ClientError`
+- Bucket not found → `ClientError`
+- Permission denied → `ClientError`
+
+All errors are logged and return `None`.
+
+## Dependencies
+
+- **boto3** - AWS SDK for S3-compatible operations
+- **botocore** - Error handling for boto3
+- **config** - Settings management
+
+## Related Modules
+
+- **formatter** - Generates the content to upload
+- **database** - Stores the public URL in Supabase
+- **config** - Provides R2 configuration settings
+
+## Notes
+
+- Function is async for consistency with other backend modules
+- Boto3 operations are synchronous (no async boto3 used)
+- Graceful degradation when storage not configured
+- Public URLs are immediately accessible after upload
+- No explicit public ACL needed (bucket configured for public reads)

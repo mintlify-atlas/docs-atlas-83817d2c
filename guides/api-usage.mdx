@@ -1,0 +1,637 @@
+---
+title: API Usage
+description: Integrate the llms.txt Generator into your applications using the WebSocket API
+icon: plug
+---
+
+The llms.txt Generator exposes a WebSocket API that allows programmatic generation of llms.txt files. This guide covers authentication, message formats, and implementation patterns.
+
+## Overview
+
+The API uses WebSockets for real-time bidirectional communication, allowing you to:
+- Send crawl requests with custom parameters
+- Receive real-time progress updates
+- Get the generated llms.txt content
+- Retrieve hosted CDN URLs
+
+## Authentication
+
+The API supports two authentication methods:
+
+<Tabs>
+  <Tab title="JWT Token (Recommended)">
+    Generate a short-lived token from the `/auth/token` endpoint.
+    
+    <Steps>
+      <Step title="Request a token">
+        ```bash cURL
+        curl -X POST https://your-backend.com/auth/token \
+          -H "X-API-Key: your-api-key"
+        ```
+        
+        **Response:**
+        ```json
+        {
+          "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+          "expires_in": 300
+        }
+        ```
+        
+        <Info>
+          Tokens are valid for 5 minutes (300 seconds).
+        </Info>
+      </Step>
+      
+      <Step title="Connect with token">
+        ```javascript WebSocket Connection
+        const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
+        const ws = new WebSocket(`wss://your-backend.com/ws/crawl?token=${token}`);
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  
+  <Tab title="API Key (Direct)">
+    Use your API key directly in the WebSocket query string.
+    
+    ```javascript WebSocket Connection
+    const apiKey = "your-api-key";
+    const ws = new WebSocket(`wss://your-backend.com/ws/crawl?api_key=${apiKey}`);
+    ```
+    
+    <Warning>
+      This method exposes your API key in the connection URL. Use JWT tokens for production applications.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Setting Up API Key
+
+Configure authentication in your backend `.env` file:
+
+```bash .env
+API_KEY=your-generated-api-key
+```
+
+Generate a secure API key:
+
+```bash Generate Key
+openssl rand -base64 32
+```
+
+## WebSocket Endpoint
+
+**URL:** `wss://your-backend.com/ws/crawl`
+
+**Query Parameters:**
+- `token` (string, optional): JWT authentication token
+- `api_key` (string, optional): Direct API key authentication
+
+<Note>
+  One authentication method (token or api_key) is required unless API_KEY is not configured in the backend.
+</Note>
+
+## Request Format
+
+After establishing the WebSocket connection, send a JSON payload to initiate crawling:
+
+### Message Schema
+
+<ParamField path="url" type="string" required>
+  The base URL of the website to crawl. Must include protocol (http:// or https://).
+  
+  **Example:** `"https://example.com"`
+</ParamField>
+
+<ParamField path="maxPages" type="integer" default={50}>
+  Maximum number of pages to crawl.
+  
+  **Range:** 1-200
+  
+  **Example:** `50`
+</ParamField>
+
+<ParamField path="descLength" type="integer" default={500}>
+  Character limit for page description excerpts.
+  
+  **Range:** 100-2000
+  
+  **Example:** `500`
+</ParamField>
+
+<ParamField path="enableAutoUpdate" type="boolean" default={false}>
+  Enable scheduled recrawls for this site.
+  
+  Requires Supabase configuration.
+</ParamField>
+
+<ParamField path="recrawlIntervalMinutes" type="integer" default={10080}>
+  Minutes between scheduled recrawls (default: 7 days).
+  
+  Only used when `enableAutoUpdate` is true.
+</ParamField>
+
+<ParamField path="llmEnhance" type="boolean" default={false}>
+  Enable LLM-powered content enhancement.
+  
+  Requires `LLM_ENHANCEMENT_ENABLED=true` in backend config.
+</ParamField>
+
+<ParamField path="useBrightdata" type="boolean" default={true}>
+  Use Brightdata proxy for JavaScript rendering.
+  
+  Falls back to the backend's `BRIGHTDATA_ENABLED` setting if not specified.
+</ParamField>
+
+### Example Request
+
+<CodeGroup>
+```json Basic Request
+{
+  "url": "https://example.com",
+  "maxPages": 50,
+  "descLength": 500
+}
+```
+
+```json With Auto-Update
+{
+  "url": "https://docs.example.com",
+  "maxPages": 100,
+  "descLength": 400,
+  "enableAutoUpdate": true,
+  "recrawlIntervalMinutes": 1440
+}
+```
+
+```json Full Configuration
+{
+  "url": "https://api.example.com",
+  "maxPages": 200,
+  "descLength": 600,
+  "enableAutoUpdate": true,
+  "recrawlIntervalMinutes": 10080,
+  "llmEnhance": true,
+  "useBrightdata": true
+}
+```
+</CodeGroup>
+
+## Response Format
+
+The server sends JSON messages with a `type` and `content` field:
+
+### Message Types
+
+<ResponseField name="log" type="string">
+  Progress updates and informational messages.
+  
+  ```json
+  {
+    "type": "log",
+    "content": "Crawling page 5/50: API Documentation"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="result" type="string">
+  The complete generated llms.txt content.
+  
+  ```json
+  {
+    "type": "result",
+    "content": "# Example Site\n\n> A comprehensive platform...\n\n## Documentation\n..."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="url" type="string">
+  The public CDN URL where the llms.txt file is hosted.
+  
+  ```json
+  {
+    "type": "url",
+    "content": "https://pub-abc123.r2.dev/example-com-xyz789.txt"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error messages when something goes wrong.
+  
+  ```json
+  {
+    "type": "error",
+    "content": "Failed to fetch https://example.com: Connection timeout"
+  }
+  ```
+</ResponseField>
+
+## Implementation Examples
+
+### JavaScript/TypeScript
+
+<CodeGroup>
+```typescript React Hook
+import { useState, useCallback, useRef } from 'react';
+
+interface CrawlPayload {
+  url: string;
+  maxPages: number;
+  descLength: number;
+  enableAutoUpdate?: boolean;
+  recrawlIntervalMinutes?: number;
+  llmEnhance?: boolean;
+  useBrightdata?: boolean;
+}
+
+export function useLLMSTxtGenerator() {
+  const [logs, setLogs] = useState<string[]>([]);
+  const [result, setResult] = useState<string>("");
+  const [hostedUrl, setHostedUrl] = useState<string>("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const generate = useCallback(async (payload: CrawlPayload) => {
+    setLogs(["Connecting..."]);
+    setResult("");
+    setHostedUrl("");
+    setIsGenerating(true);
+
+    try {
+      // Get JWT token
+      const tokenRes = await fetch('/api/auth/token', { method: 'POST' });
+      const { token } = await tokenRes.json();
+
+      // Connect to WebSocket
+      const ws = new WebSocket(
+        `wss://your-backend.com/ws/crawl?token=${token}`
+      );
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setLogs(prev => [...prev, `Starting crawl of ${payload.url}...`]);
+        ws.send(JSON.stringify(payload));
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        switch (data.type) {
+          case "log":
+            setLogs(prev => [...prev, data.content]);
+            break;
+          case "result":
+            setResult(data.content);
+            break;
+          case "url":
+            setHostedUrl(data.content);
+            break;
+          case "error":
+            setLogs(prev => [...prev, `ERROR: ${data.content}`]);
+            break;
+        }
+      };
+
+      ws.onerror = () => {
+        setLogs(prev => [...prev, "Connection error"]);
+        setIsGenerating(false);
+      };
+
+      ws.onclose = () => {
+        setIsGenerating(false);
+      };
+    } catch (error) {
+      setLogs(prev => [...prev, `Error: ${error}`]);
+      setIsGenerating(false);
+    }
+  }, []);
+
+  const cancel = useCallback(() => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setIsGenerating(false);
+  }, []);
+
+  return { logs, result, hostedUrl, isGenerating, generate, cancel };
+}
+```
+
+```javascript Node.js
+const WebSocket = require('ws');
+const https = require('https');
+
+async function generateLLMSTxt(config) {
+  // Get JWT token
+  const tokenRes = await fetch('https://your-backend.com/auth/token', {
+    method: 'POST',
+    headers: { 'X-API-Key': process.env.API_KEY }
+  });
+  const { token } = await tokenRes.json();
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(
+      `wss://your-backend.com/ws/crawl?token=${token}`
+    );
+
+    let result = null;
+    let hostedUrl = null;
+
+    ws.on('open', () => {
+      console.log('Connected to llms.txt generator');
+      ws.send(JSON.stringify(config));
+    });
+
+    ws.on('message', (data) => {
+      const message = JSON.parse(data);
+
+      switch (message.type) {
+        case 'log':
+          console.log(`[LOG] ${message.content}`);
+          break;
+        case 'result':
+          result = message.content;
+          break;
+        case 'url':
+          hostedUrl = message.content;
+          break;
+        case 'error':
+          console.error(`[ERROR] ${message.content}`);
+          reject(new Error(message.content));
+          break;
+      }
+    });
+
+    ws.on('close', () => {
+      if (result) {
+        resolve({ result, hostedUrl });
+      } else {
+        reject(new Error('Connection closed without result'));
+      }
+    });
+
+    ws.on('error', (error) => {
+      console.error('WebSocket error:', error);
+      reject(error);
+    });
+  });
+}
+
+// Usage
+(async () => {
+  try {
+    const { result, hostedUrl } = await generateLLMSTxt({
+      url: 'https://example.com',
+      maxPages: 50,
+      descLength: 500,
+      enableAutoUpdate: true,
+      recrawlIntervalMinutes: 10080
+    });
+
+    console.log('Generated llms.txt:');
+    console.log(result);
+    console.log('\nHosted at:', hostedUrl);
+  } catch (error) {
+    console.error('Failed to generate:', error);
+  }
+})();
+```
+</CodeGroup>
+
+### Python
+
+```python Python Client
+import asyncio
+import json
+import websockets
+import httpx
+from typing import Optional, Callable
+
+class LLMSTxtGenerator:
+    def __init__(self, backend_url: str, api_key: str):
+        self.backend_url = backend_url
+        self.api_key = api_key
+        self.ws_url = backend_url.replace('https://', 'wss://').replace('http://', 'ws://')
+
+    async def get_token(self) -> str:
+        """Get JWT token for authentication."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.backend_url}/auth/token",
+                headers={"X-API-Key": self.api_key}
+            )
+            response.raise_for_status()
+            return response.json()["token"]
+
+    async def generate(
+        self,
+        url: str,
+        max_pages: int = 50,
+        desc_length: int = 500,
+        enable_auto_update: bool = False,
+        recrawl_interval_minutes: int = 10080,
+        llm_enhance: bool = False,
+        use_brightdata: bool = True,
+        on_log: Optional[Callable[[str], None]] = None
+    ) -> tuple[str, Optional[str]]:
+        """Generate llms.txt for a website.
+        
+        Returns:
+            (result, hosted_url) tuple
+        """
+        token = await self.get_token()
+        ws_url = f"{self.ws_url}/ws/crawl?token={token}"
+
+        result = None
+        hosted_url = None
+
+        async with websockets.connect(ws_url) as websocket:
+            # Send crawl request
+            await websocket.send(json.dumps({
+                "url": url,
+                "maxPages": max_pages,
+                "descLength": desc_length,
+                "enableAutoUpdate": enable_auto_update,
+                "recrawlIntervalMinutes": recrawl_interval_minutes,
+                "llmEnhance": llm_enhance,
+                "useBrightdata": use_brightdata
+            }))
+
+            # Receive messages
+            async for message in websocket:
+                data = json.loads(message)
+                msg_type = data.get("type")
+                content = data.get("content")
+
+                if msg_type == "log":
+                    if on_log:
+                        on_log(content)
+                    else:
+                        print(f"[LOG] {content}")
+                elif msg_type == "result":
+                    result = content
+                elif msg_type == "url":
+                    hosted_url = content
+                elif msg_type == "error":
+                    raise Exception(f"Crawl error: {content}")
+
+        return result, hosted_url
+
+# Usage
+async def main():
+    generator = LLMSTxtGenerator(
+        backend_url="https://your-backend.com",
+        api_key="your-api-key"
+    )
+
+    result, hosted_url = await generator.generate(
+        url="https://example.com",
+        max_pages=50,
+        desc_length=500,
+        enable_auto_update=True
+    )
+
+    print("Generated llms.txt:")
+    print(result)
+    print(f"\nHosted at: {hosted_url}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Error Handling
+
+### Connection Errors
+
+<CodeGroup>
+```javascript WebSocket Errors
+ws.onerror = (error) => {
+  console.error('WebSocket error:', error);
+  // Handle connection failures
+};
+
+ws.onclose = (event) => {
+  if (event.code === 1008) {
+    console.error('Authentication failed');
+  } else if (event.code === 1006) {
+    console.error('Connection closed abnormally');
+  }
+};
+```
+
+```python Python Exception Handling
+try:
+    result, hosted_url = await generator.generate(url="https://example.com")
+except websockets.exceptions.InvalidStatusCode as e:
+    if e.status_code == 401:
+        print("Authentication failed")
+    elif e.status_code == 403:
+        print("Access forbidden")
+except Exception as e:
+    print(f"Generation failed: {e}")
+```
+</CodeGroup>
+
+### Server-Side Errors
+
+The server sends error messages with `type: "error"`:
+
+```json Error Message
+{
+  "type": "error",
+  "content": "Failed to fetch https://example.com: Connection timeout"
+}
+```
+
+Common error messages:
+- `"Failed to fetch <url>: Connection timeout"` - Target site is unreachable
+- `"Invalid URL format"` - URL validation failed
+- `"Max pages must be between 1 and 200"` - Invalid parameter
+- `"Crawl interrupted"` - Unexpected crawl termination
+
+## Rate Limiting
+
+<Warning>
+  The API does not currently implement rate limiting at the application level. Consider implementing rate limiting in your client code or using a reverse proxy (CloudFlare, nginx) for production deployments.
+</Warning>
+
+Client-side rate limiting example:
+
+```javascript Rate Limiting
+class RateLimitedGenerator {
+  constructor(maxConcurrent = 3) {
+    this.maxConcurrent = maxConcurrent;
+    this.active = 0;
+    this.queue = [];
+  }
+
+  async generate(config) {
+    if (this.active >= this.maxConcurrent) {
+      await new Promise(resolve => this.queue.push(resolve));
+    }
+
+    this.active++;
+    try {
+      return await actualGenerate(config);
+    } finally {
+      this.active--;
+      if (this.queue.length > 0) {
+        this.queue.shift()();
+      }
+    }
+  }
+}
+```
+
+## Testing
+
+### Using wscat
+
+Test the WebSocket API from the command line:
+
+```bash Install wscat
+npm install -g wscat
+```
+
+```bash Connect and Send
+# Connect with API key
+wscat -c "wss://your-backend.com/ws/crawl?api_key=your-key"
+
+# Send crawl request (after connection)
+{"url":"https://example.com","maxPages":10,"descLength":300}
+```
+
+### Health Check
+
+Verify the backend is running:
+
+```bash Health Endpoint
+curl https://your-backend.com/health
+```
+
+Expected response:
+```json
+{
+  "status": "ok"
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="sliders" href="/guides/configuration">
+    Learn about all environment variables and settings
+  </Card>
+  
+  <Card title="Web Interface" icon="browser" href="/guides/web-interface">
+    Use the user-friendly web UI instead of the API
+  </Card>
+  
+  <Card title="API Reference" icon="book" href="/api/websocket">
+    View the complete API specification
+  </Card>
+  
+  <Card title="Deployment" icon="rocket" href="/essentials/deployment">
+    Deploy your own instance
+  </Card>
+</CardGroup>

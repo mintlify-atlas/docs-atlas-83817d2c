@@ -1,0 +1,597 @@
+---
+title: llms.txt Specification
+description: Understanding the llms.txt format and how the generator implements the specification
+icon: file-lines
+---
+
+The llms.txt format is a standardized way to represent website content for Large Language Model consumption. This guide explains the specification and how the llms.txt Generator implements it.
+
+## What is llms.txt?
+
+llms.txt is a lightweight, human-readable format for describing website content in a way that's optimized for LLM understanding. It's similar in spirit to robots.txt or sitemap.xml, but designed specifically for AI consumption.
+
+Learn more at [llmstxt.org](https://llmstxt.org/)
+
+## Format Overview
+
+An llms.txt file is a Markdown document with a specific structure:
+
+```markdown Structure
+# [Site Name]
+
+> [Brief site description]
+
+## [Section Name]
+
+- [Page Title](url): Page description [Tags]
+- [Page Title](url): Page description [Tags]
+
+## [Section Name]
+
+- [Page Title](url): Page description [Tags]
+
+## Optional
+
+- [Secondary pages without descriptions]
+```
+
+## Specification Components
+
+### 1. Header Section
+
+<CodeGroup>
+```markdown Format
+# Site Title
+
+> Brief description of the website
+```
+
+```markdown Example
+# OpenAI Platform
+
+> Developer platform for building AI-powered applications with GPT models, APIs, and tools
+```
+</CodeGroup>
+
+**Implementation Details:**
+
+<Steps>
+  <Step title="Extract site title">
+    The generator uses the homepage `<title>` tag as the site name.
+    
+    ```python formatter.py:75-84
+    def get_site_title(homepage: PageInfo, base_url: str) -> str:
+        title = homepage.title.strip() if homepage.title else ""
+        
+        generic_titles = {'home', 'welcome', 'index', ''}
+        if title.lower() in generic_titles:
+            domain = urlparse(base_url).netloc
+            domain = domain.replace('www.', '').replace('.com', '').replace('.org', '')
+            return domain.replace('.', ' ').title()
+        
+        return truncate(title, 80)
+    ```
+    
+    If the title is generic ("Home", "Welcome"), it derives a title from the domain name.
+  </Step>
+  
+  <Step title="Generate site description">
+    The description comes from the homepage's meta description or OpenGraph tags.
+    
+    ```python formatter.py:86-88
+    def get_summary(homepage: PageInfo) -> str:
+        desc = homepage.description or homepage.snippet or "No description available"
+        return truncate(desc.strip(), 200)
+    ```
+    
+    Fallback priority:
+    1. `<meta name="description">`
+    2. `<meta property="og:description">`
+    3. First paragraph of body text
+    4. "No description available"
+  </Step>
+</Steps>
+
+### 2. Section Organization
+
+Content is organized into sections based on URL structure:
+
+```markdown Section Example
+## Documentation
+
+- [Getting Started](https://example.com/docs/getting-started): Quick introduction...
+- [API Reference](https://example.com/docs/api): Complete API documentation...
+
+## Guides
+
+- [Authentication](https://example.com/guides/auth): Learn how to authenticate...
+- [Best Practices](https://example.com/guides/best-practices): Recommended patterns...
+```
+
+**Implementation Details:**
+
+<Steps>
+  <Step title="Extract sections from URLs">
+    Sections are derived from the first path segment:
+    
+    ```python formatter.py:124-128
+    for page in pages[1:]:
+        clean = clean_url(page.url)
+        path_parts = clean.replace(base_url, "").strip("/").split("/")
+        section = path_parts[0] if path_parts and path_parts[0] else "main"
+    ```
+    
+    **Examples:**
+    - `https://example.com/docs/intro` → "docs" section
+    - `https://example.com/api/users` → "api" section
+    - `https://example.com/about` → "about" section
+  </Step>
+  
+  <Step title="Clean section names">
+    Section names are formatted for readability:
+    
+    ```python formatter.py:90-103
+    def clean_section_name(name: str) -> str:
+        if not name or not name.strip():
+            return "Main"
+        
+        name = name.strip()
+        abbrevs = {'api', 'rest', 'graphql', 'sdk', 'cli', 'ui', 'ux', 'faq', 'rss'}
+        
+        name = name.replace('-', ' ').replace('_', ' ')
+        words = name.split()
+        
+        return ' '.join(
+            w.upper() if w.lower() in abbrevs else w.capitalize()
+            for w in words
+        )
+    ```
+    
+    **Transformations:**
+    - `api-reference` → "API Reference"
+    - `getting_started` → "Getting Started"
+    - `faq` → "FAQ"
+  </Step>
+  
+  <Step title="Separate primary and secondary content">
+    Secondary content (privacy, terms, etc.) is grouped into an "Optional" section:
+    
+    ```python formatter.py:7-14
+    SECONDARY_PATH_PATTERNS = [
+        '/privacy', '/terms', '/legal', '/cookie', '/disclaimer',
+        '/sitemap', '/changelog', '/release',
+        '/contributing', '/code-of-conduct', '/governance', '/license',
+        '/about', '/team', '/career', '/job', '/contact', '/company',
+        '/twitter', '/github', '/linkedin', '/facebook', '/social',
+        '/archive', '/old', '/legacy', '/deprecated',
+    ]
+    ```
+  </Step>
+</Steps>
+
+### 3. Page Entries
+
+Each page is represented as a list item with:
+- Title (linked to URL)
+- Description
+- Optional tags
+
+```markdown Page Entry Format
+- [Title](url): Description [Tag1] [Tag2]
+```
+
+**Implementation Details:**
+
+<Steps>
+  <Step title="Format URLs">
+    URLs are cleaned and prefer Markdown versions when available:
+    
+    ```python formatter.py:16-31
+    def clean_url(url: str) -> str:
+        parsed = urlparse(url)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+    
+    def get_md_url(url: str) -> str:
+        parsed = urlparse(url)
+        path = parsed.path
+        
+        if path.endswith('.html'):
+            md_path = f"{path}.md"
+        elif path.endswith('/') or not path:
+            md_path = f"{path}index.html.md" if path.endswith('/') else f"{path}/index.html.md"
+        else:
+            md_path = f"{path}.md"
+        
+        return urlunparse((parsed.scheme, parsed.netloc, md_path, '', '', ''))
+    ```
+    
+    <Info>
+      The generator checks if `.md` versions exist via HEAD requests and prefers them for better LLM parsing.
+    </Info>
+  </Step>
+  
+  <Step title="Extract and truncate descriptions">
+    Descriptions are extracted from page metadata and truncated:
+    
+    ```python formatter.py:69-73
+    def truncate(text: str, length: int = 150) -> str:
+        if not text:
+            return ""
+        text = text.strip()
+        return f"{text[:length]}..." if len(text) > length else text
+    ```
+    
+    Default truncation:
+    - Section descriptions: 150 characters
+    - Site summary: 200 characters
+  </Step>
+  
+  <Step title="Assign content tags">
+    Tags are automatically assigned based on page content:
+    
+    ```python tagger.py:4-23
+    TAG_PATTERNS = {
+        'API': ['api', 'rest-api', 'graphql', 'endpoint', '/api/', 'api-reference'],
+        'Guide': ['guide', 'tutorial', 'how-to', 'walkthrough', 'learn'],
+        'Quickstart': ['getting-started', 'quickstart', 'quick-start', 'quick start',
+                       'get-started', 'getting started', 'start'],
+        'Reference': ['reference', 'documentation', '/docs/', 'reference-guide'],
+        'Example': ['example', 'sample', 'demo', 'code-sample', 'examples'],
+        'SDK': ['sdk', 'library', 'client-library', 'package'],
+        'CLI': ['cli', 'command-line', 'terminal', 'commands'],
+        'Blog': ['blog', 'article', 'post', '/blog/', 'news'],
+        'Changelog': ['changelog', 'release-notes', 'releases', 'updates', 'what-new'],
+        
+        'Beginner': ['getting-started', 'intro', 'introduction', 'basics', 'fundamentals'],
+        'Advanced': ['advanced', 'expert', 'in-depth', 'deep-dive'],
+        
+        'Security': ['security', 'auth', 'authentication', 'authorization', 'oauth'],
+        'Performance': ['performance', 'optimization', 'speed', 'caching'],
+        'Integration': ['integration', 'webhook', 'third-party', 'connect'],
+        'Troubleshooting': ['troubleshoot', 'debug', 'error', 'faq', 'common-issues'],
+    }
+    ```
+    
+    Tag categories:
+    - **Content Type**: API, Guide, Reference, Example, SDK, CLI, Blog, Changelog
+    - **Complexity**: Beginner, Advanced
+    - **Topic**: Security, Performance, Integration, Troubleshooting
+  </Step>
+</Steps>
+
+### 4. Optional Section
+
+Secondary pages are grouped at the end without descriptions:
+
+```markdown Optional Section
+## Optional
+
+- [Privacy Policy](https://example.com/privacy)
+- [Terms of Service](https://example.com/terms)
+- [Code of Conduct](https://example.com/code-of-conduct)
+```
+
+**Implementation:**
+
+```python formatter.py:146-173
+if not sections:
+    return "\n".join(lines)
+
+primary = {}
+secondary = {}
+
+for section_name, links in sections.items():
+    if is_secondary_section(section_name):
+        secondary[section_name] = links
+    else:
+        primary[section_name] = links
+
+# Add primary sections
+for section_name in sorted(primary.keys()):
+    clean_name = clean_section_name(section_name)
+    lines.extend([
+        f"## {clean_name}",
+        "",
+        *primary[section_name],
+        ""
+    ])
+
+# Add optional section
+if secondary:
+    lines.extend([
+        "## Optional",
+        "",
+    ])
+    
+    for section_name in sorted(secondary.keys()):
+        lines.extend(secondary[section_name])
+```
+
+## Complete Example
+
+<Tabs>
+  <Tab title="Generated Output">
+    ```markdown llms.txt
+    # FastAPI Documentation
+    
+    > FastAPI is a modern, fast web framework for building APIs with Python based on standard Python type hints
+    
+    ## Tutorial
+    
+    - [First Steps](https://fastapi.tiangolo.com/tutorial/first-steps): Create your first FastAPI application [Quickstart] [Beginner]
+    - [Path Parameters](https://fastapi.tiangolo.com/tutorial/path-params): Declare path parameters in routes [Guide]
+    - [Query Parameters](https://fastapi.tiangolo.com/tutorial/query-params): Handle query parameters in requests [Guide]
+    - [Request Body](https://fastapi.tiangolo.com/tutorial/body): Define request body with Pydantic models [Guide]
+    
+    ## Advanced
+    
+    - [Security](https://fastapi.tiangolo.com/advanced/security): Implement OAuth2 and JWT authentication [Security] [Advanced]
+    - [Custom Response](https://fastapi.tiangolo.com/advanced/custom-response): Return custom response types [Advanced]
+    - [Testing](https://fastapi.tiangolo.com/advanced/testing): Write tests for your API [Guide]
+    
+    ## Deployment
+    
+    - [Docker](https://fastapi.tiangolo.com/deployment/docker): Deploy with Docker containers [Guide]
+    - [Server Workers](https://fastapi.tiangolo.com/deployment/server-workers): Configure Gunicorn and Uvicorn [Guide]
+    
+    ## Optional
+    
+    - [Release Notes](https://fastapi.tiangolo.com/release-notes)
+    - [Contributing](https://fastapi.tiangolo.com/contributing)
+    - [Privacy Policy](https://fastapi.tiangolo.com/privacy)
+    ```
+  </Tab>
+  
+  <Tab title="HTML Source">
+    ```html Homepage
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>FastAPI - FastAPI Documentation</title>
+      <meta name="description" content="FastAPI is a modern, fast web framework for building APIs with Python based on standard Python type hints">
+    </head>
+    <body>
+      <!-- Page content -->
+    </body>
+    </html>
+    ```
+    
+    ```html Tutorial Page
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>First Steps - FastAPI</title>
+      <meta name="description" content="Create your first FastAPI application with this simple example">
+    </head>
+    <body>
+      <!-- Page content -->
+    </body>
+    </html>
+    ```
+  </Tab>
+</Tabs>
+
+## Specification Compliance
+
+The generator adheres to the official llmstxt.org specification:
+
+<Accordion title="✅ Markdown Format">
+  All output is valid Markdown that can be parsed by standard Markdown processors.
+  
+  - Uses standard heading syntax (`#`, `##`)
+  - Uses standard link syntax (`[text](url)`)
+  - Uses standard list syntax (`-`)
+  - Uses standard blockquote syntax (`>`)
+</Accordion>
+
+<Accordion title="✅ Hierarchical Structure">
+  Content is organized in a clear hierarchy:
+  
+  1. Site title (H1)
+  2. Site description (blockquote)
+  3. Sections (H2)
+  4. Pages (list items)
+</Accordion>
+
+<Accordion title="✅ Semantic Organization">
+  Pages are grouped logically:
+  
+  - Primary content by URL structure
+  - Secondary content in "Optional" section
+  - Alphabetically sorted within sections
+</Accordion>
+
+<Accordion title="✅ Clean URLs">
+  URLs are normalized and cleaned:
+  
+  - Query parameters removed
+  - Fragments removed
+  - Prefers `.md` versions when available
+  - Uses HTTPS when available
+</Accordion>
+
+<Accordion title="✅ Content Truncation">
+  Descriptions are truncated at semantic boundaries:
+  
+  - Truncates at word boundaries (not mid-word)
+  - Adds ellipsis when truncated
+  - Configurable length limits
+</Accordion>
+
+<Accordion title="✅ Metadata Enrichment">
+  Pages include contextual metadata:
+  
+  - Content type tags (API, Guide, etc.)
+  - Complexity tags (Beginner, Advanced)
+  - Topic tags (Security, Performance, etc.)
+</Accordion>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Keep Descriptions Concise" icon="scissors">
+    Descriptions should be 100-200 characters. The generator enforces this automatically.
+  </Card>
+  
+  <Card title="Use Semantic Sections" icon="layer-group">
+    Organize content by user journey (Getting Started, Guides, API Reference) rather than technical structure.
+  </Card>
+  
+  <Card title="Include Key Pages" icon="star">
+    Prioritize documentation, guides, and API references over marketing pages.
+  </Card>
+  
+  <Card title="Update Regularly" icon="arrows-rotate">
+    Use auto-update to keep llms.txt synchronized with website changes.
+  </Card>
+</CardGroup>
+
+## Customization
+
+While the specification is standardized, you can customize the generator's behavior:
+
+### Section Patterns
+
+Modify secondary content detection:
+
+```python formatter.py:7-14
+SECONDARY_PATH_PATTERNS = [
+    '/privacy', '/terms', '/legal',
+    # Add your patterns
+    '/disclaimer', '/cookie-policy',
+]
+```
+
+### Tag Patterns
+
+Add custom tag detection:
+
+```python tagger.py:4-23
+TAG_PATTERNS = {
+    'API': ['api', 'rest-api', 'graphql'],
+    'Custom': ['custom-pattern', 'special'],  # Add custom tags
+}
+```
+
+### Truncation Limits
+
+Adjust description lengths:
+
+```python formatter.py:135-136
+tags = assign_tags(page, section_name=section)
+desc = truncate(page.description, 150)  # Change limit here
+```
+
+## Validation
+
+Validate your llms.txt file:
+
+<Steps>
+  <Step title="Check Markdown syntax">
+    ```bash Validate with markdownlint
+    npm install -g markdownlint-cli
+    markdownlint llms.txt
+    ```
+  </Step>
+  
+  <Step title="Verify link accessibility">
+    ```bash Check links
+    npm install -g markdown-link-check
+    markdown-link-check llms.txt
+    ```
+  </Step>
+  
+  <Step title="Test LLM parsing">
+    Ask an LLM to summarize your llms.txt:
+    
+    ```
+    Given this llms.txt file, what are the main sections and key pages?
+    
+    [paste your llms.txt content]
+    ```
+  </Step>
+</Steps>
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="Why Markdown instead of JSON or XML?">
+    Markdown is:
+    - Human-readable and editable
+    - LLM-friendly (models train on Markdown)
+    - Version control friendly
+    - Simpler than structured formats
+  </Accordion>
+  
+  <Accordion title="How is this different from sitemap.xml?">
+    Sitemaps are for search engine crawlers. llms.txt is optimized for LLM understanding:
+    - Includes descriptions and context
+    - Organized by user journey
+    - Includes content type hints
+    - Filters out irrelevant pages
+  </Accordion>
+  
+  <Accordion title="Can I edit the generated file?">
+    Yes! The generator provides a starting point. You can:
+    - Reorder sections
+    - Edit descriptions
+    - Add/remove pages
+    - Customize tags
+    
+    Consider using auto-update with caution if you make manual edits.
+  </Accordion>
+  
+  <Accordion title="Should I include all pages?">
+    No. Focus on content valuable to LLMs:
+    - Documentation and guides
+    - API references
+    - Conceptual content
+    - Examples and tutorials
+    
+    Exclude:
+    - Marketing pages
+    - Legal pages (or put in Optional)
+    - Duplicate content
+    - Internal tools/admin pages
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="llmstxt.org" icon="globe" href="https://llmstxt.org">
+    Official specification and guidelines
+  </Card>
+  
+  <Card title="Example Sites" icon="list" href="https://llmstxt.org/examples">
+    Real-world llms.txt implementations
+  </Card>
+  
+  <Card title="Formatter Code" icon="code" href="/api/formatter">
+    Implementation details in the codebase
+  </Card>
+  
+  <Card title="Web Interface" icon="browser" href="/guides/web-interface">
+    Generate your own llms.txt file
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Generate Your First File" icon="play" href="/quickstart">
+    Create an llms.txt file in minutes
+  </Card>
+  
+  <Card title="API Usage" icon="code" href="/guides/api-usage">
+    Integrate programmatically
+  </Card>
+  
+  <Card title="Configuration" icon="sliders" href="/guides/configuration">
+    Customize the generator behavior
+  </Card>
+  
+  <Card title="Development" icon="wrench" href="/development">
+    Contribute to the project
+  </Card>
+</CardGroup>

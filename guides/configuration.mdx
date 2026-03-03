@@ -1,0 +1,551 @@
+---
+title: Configuration
+description: Complete reference for environment variables and configuration options
+icon: sliders
+---
+
+The llms.txt Generator is configured through environment variables. This guide covers all available settings for both backend and frontend components.
+
+## Backend Configuration
+
+Backend configuration is managed through a `.env` file in the `backend/` directory.
+
+### Required Settings
+
+<ParamField path="CORS_ORIGINS" type="string" default="http://localhost:3000">
+  Comma-separated list of allowed CORS origins.
+  
+  ```bash .env
+  CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+  ```
+  
+  <Info>
+    The frontend URL must be included in this list for WebSocket connections to work.
+  </Info>
+</ParamField>
+
+### Database Configuration
+
+Required for auto-update functionality and site tracking.
+
+<ParamField path="SUPABASE_URL" type="string" required>
+  Your Supabase project URL.
+  
+  ```bash .env
+  SUPABASE_URL=https://your-project.supabase.co
+  ```
+  
+  Get this from: **Supabase Dashboard → Settings → API → Project URL**
+</ParamField>
+
+<ParamField path="SUPABASE_KEY" type="string" required>
+  Your Supabase anonymous/public key.
+  
+  ```bash .env
+  SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ```
+  
+  Get this from: **Supabase Dashboard → Settings → API → anon public**
+</ParamField>
+
+### Storage Configuration
+
+Required for hosting generated llms.txt files on a public CDN.
+
+<ParamField path="R2_ENDPOINT" type="string" required>
+  Cloudflare R2 endpoint URL.
+  
+  ```bash .env
+  R2_ENDPOINT=https://abc123.r2.cloudflarestorage.com
+  ```
+  
+  Format: `https://<account-id>.r2.cloudflarestorage.com`
+</ParamField>
+
+<ParamField path="R2_ACCESS_KEY" type="string" required>
+  R2 access key ID.
+  
+  ```bash .env
+  R2_ACCESS_KEY=your-access-key-id
+  ```
+  
+  Generate from: **Cloudflare Dashboard → R2 → Manage R2 API Tokens**
+</ParamField>
+
+<ParamField path="R2_SECRET_KEY" type="string" required>
+  R2 secret access key.
+  
+  ```bash .env
+  R2_SECRET_KEY=your-secret-access-key
+  ```
+  
+  <Warning>
+    Keep this secret! Never commit to version control.
+  </Warning>
+</ParamField>
+
+<ParamField path="R2_BUCKET" type="string" default="llms-txt">
+  Name of the R2 bucket for storing llms.txt files.
+  
+  ```bash .env
+  R2_BUCKET=llms-txt
+  ```
+  
+  Create this bucket in the Cloudflare R2 dashboard before using.
+</ParamField>
+
+<ParamField path="R2_PUBLIC_DOMAIN" type="string" required>
+  Public domain for accessing R2 files.
+  
+  ```bash .env
+  R2_PUBLIC_DOMAIN=https://pub-abc123.r2.dev
+  ```
+  
+  Options:
+  - Use R2's public domain: `https://pub-<bucket-id>.r2.dev`
+  - Use a custom domain connected to R2
+</ParamField>
+
+### Brightdata Configuration
+
+Optional proxy service for crawling JavaScript-heavy websites.
+
+<ParamField path="BRIGHTDATA_API_KEY" type="string">
+  Your Brightdata customer ID.
+  
+  ```bash .env
+  BRIGHTDATA_API_KEY=your-customer-id
+  ```
+  
+  Get this from: **Brightdata Dashboard → Overview → Customer ID**
+</ParamField>
+
+<ParamField path="BRIGHTDATA_PASSWORD" type="string">
+  Zone password for your Brightdata zone.
+  
+  ```bash .env
+  BRIGHTDATA_PASSWORD=your-zone-password
+  ```
+  
+  Get this from: **Brightdata Dashboard → Zones → Zone Password**
+</ParamField>
+
+<ParamField path="BRIGHTDATA_ZONE" type="string" default="scraping_browser1">
+  Brightdata zone to use for crawling.
+  
+  ```bash .env
+  BRIGHTDATA_ZONE=scraping_browser1
+  ```
+  
+  Options:
+  - `scraping_browser1` - Standard scraping browser
+  - Custom zones you've created
+</ParamField>
+
+<ParamField path="BRIGHTDATA_ENABLED" type="boolean" default={true}>
+  Global toggle for Brightdata usage.
+  
+  ```bash .env
+  BRIGHTDATA_ENABLED=true
+  ```
+  
+  <Info>
+    Individual requests can override this with the `useBrightdata` parameter.
+  </Info>
+</ParamField>
+
+### LLM Enhancement Configuration
+
+Optional AI-powered content optimization using OpenRouter.
+
+<ParamField path="LLM_ENHANCEMENT_ENABLED" type="boolean" default={false}>
+  Enable LLM-powered content enhancement.
+  
+  ```bash .env
+  LLM_ENHANCEMENT_ENABLED=false
+  ```
+  
+  <Warning>
+    Must be explicitly enabled. Requires `OPENROUTER_API_KEY` to be set.
+  </Warning>
+</ParamField>
+
+<ParamField path="OPENROUTER_API_KEY" type="string">
+  OpenRouter API key for LLM enhancement.
+  
+  ```bash .env
+  OPENROUTER_API_KEY=sk-or-v1-...
+  ```
+  
+  Get this from: [https://openrouter.ai/keys](https://openrouter.ai/keys)
+</ParamField>
+
+<ParamField path="OPENROUTER_MODEL" type="string" default="x-ai/grok-4.1-fast:free">
+  OpenRouter model to use for enhancement.
+  
+  ```bash .env
+  OPENROUTER_MODEL=x-ai/grok-4.1-fast:free
+  ```
+  
+  Options:
+  - `x-ai/grok-4.1-fast:free` - Grok 4.1 Fast (free tier)
+  - `anthropic/claude-3-5-sonnet` - Claude 3.5 Sonnet
+  - `openai/gpt-4-turbo` - GPT-4 Turbo
+  
+  See [OpenRouter docs](https://openrouter.ai/docs) for all models.
+</ParamField>
+
+<ParamField path="LLM_TIMEOUT_SECONDS" type="float" default={30.0}>
+  Timeout for LLM API requests in seconds.
+  
+  ```bash .env
+  LLM_TIMEOUT_SECONDS=30.0
+  ```
+</ParamField>
+
+<ParamField path="LLM_MAX_RETRIES" type="integer" default={3}>
+  Maximum retry attempts for failed LLM requests.
+  
+  ```bash .env
+  LLM_MAX_RETRIES=3
+  ```
+</ParamField>
+
+<ParamField path="LLM_TEMPERATURE" type="float" default={0.3}>
+  Temperature parameter for LLM generation (0.0-1.0).
+  
+  ```bash .env
+  LLM_TEMPERATURE=0.3
+  ```
+  
+  - Lower values (0.1-0.3): More consistent, deterministic output
+  - Higher values (0.7-1.0): More creative, varied output
+</ParamField>
+
+### Security Configuration
+
+<ParamField path="API_KEY" type="string">
+  API key for authenticating WebSocket connections.
+  
+  ```bash .env
+  API_KEY=your-secure-api-key
+  ```
+  
+  Generate a secure key:
+  ```bash
+  openssl rand -base64 32
+  ```
+  
+  <Note>
+    If not set, WebSocket connections will not require authentication. Only use this for development.
+  </Note>
+</ParamField>
+
+<ParamField path="CRON_SECRET" type="string">
+  Secret token for authenticating cron job requests.
+  
+  ```bash .env
+  CRON_SECRET=your-cron-secret-token
+  ```
+  
+  Required for:
+  - `/internal/cron/recrawl` - Scheduled recrawl endpoint
+  
+  Generate a secure token:
+  ```bash
+  openssl rand -base64 32
+  ```
+</ParamField>
+
+## Frontend Configuration
+
+Frontend configuration is managed through a `.env.local` file in the `frontend/` directory.
+
+<ParamField path="NEXT_PUBLIC_WS_URL" type="string" required>
+  WebSocket URL for the backend API.
+  
+  ```bash .env.local
+  # Development
+  NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/crawl
+  
+  # Production
+  NEXT_PUBLIC_WS_URL=wss://your-backend.com/ws/crawl
+  ```
+  
+  <Info>
+    Use `ws://` for local development and `wss://` (secure WebSocket) for production.
+  </Info>
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_API_KEY" type="string">
+  API key for authenticating with the backend (optional).
+  
+  ```bash .env.local
+  NEXT_PUBLIC_API_KEY=your-api-key
+  ```
+  
+  <Warning>
+    Only use this for testing. Production should use JWT tokens via the `/auth/token` endpoint.
+  </Warning>
+</ParamField>
+
+## Configuration File Reference
+
+The backend uses Pydantic Settings for configuration management:
+
+```python config.py
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # CORS
+    cors_origins: str = "http://localhost:3000"
+    
+    # R2 Storage
+    r2_endpoint: str | None = None
+    r2_access_key: str | None = None
+    r2_secret_key: str | None = None
+    r2_bucket: str | None = None
+    r2_public_domain: str | None = None
+    
+    # Database
+    supabase_url: str | None = None
+    supabase_key: str | None = None
+    
+    # Security
+    cron_secret: str | None = None
+    api_key: str | None = None
+    
+    # Brightdata
+    brightdata_api_key: str | None = None
+    brightdata_enabled: bool = True
+    brightdata_zone: str = "scraping_browser1"
+    brightdata_password: str | None = None
+    
+    # LLM Enhancement
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "x-ai/grok-4.1-fast:free"
+    llm_enhancement_enabled: bool = False
+    llm_timeout_seconds: float = 30.0
+    llm_max_retries: int = 3
+    llm_temperature: float = 0.3
+
+    class Config:
+        env_file = ".env"
+```
+
+## Environment File Examples
+
+### Development Environment
+
+<CodeGroup>
+```bash backend/.env
+# CORS - Allow local frontend
+CORS_ORIGINS=http://localhost:3000
+
+# Database (Optional for development)
+# SUPABASE_URL=https://xxx.supabase.co
+# SUPABASE_KEY=your-key
+
+# Storage (Optional for development)
+# R2_ENDPOINT=https://xxx.r2.cloudflarestorage.com
+# R2_ACCESS_KEY=your-key
+# R2_SECRET_KEY=your-secret
+# R2_BUCKET=llms-txt
+# R2_PUBLIC_DOMAIN=https://pub-xxx.r2.dev
+
+# Brightdata (Optional)
+# BRIGHTDATA_API_KEY=your-customer-id
+# BRIGHTDATA_ENABLED=false
+# BRIGHTDATA_ZONE=scraping_browser1
+# BRIGHTDATA_PASSWORD=your-password
+
+# Security (Optional for development)
+# API_KEY=dev-key-only
+```
+
+```bash frontend/.env.local
+# Backend WebSocket URL
+NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/crawl
+```
+</CodeGroup>
+
+### Production Environment
+
+<CodeGroup>
+```bash backend/.env
+# CORS - Production domains
+CORS_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+
+# Database - Required
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Storage - Required
+R2_ENDPOINT=https://abc123.r2.cloudflarestorage.com
+R2_ACCESS_KEY=your-access-key
+R2_SECRET_KEY=your-secret-key
+R2_BUCKET=llms-txt
+R2_PUBLIC_DOMAIN=https://cdn.yourdomain.com
+
+# Brightdata - Recommended
+BRIGHTDATA_API_KEY=your-customer-id
+BRIGHTDATA_ENABLED=true
+BRIGHTDATA_ZONE=scraping_browser1
+BRIGHTDATA_PASSWORD=your-zone-password
+
+# LLM Enhancement - Optional
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=x-ai/grok-4.1-fast:free
+LLM_ENHANCEMENT_ENABLED=true
+LLM_TIMEOUT_SECONDS=30.0
+LLM_MAX_RETRIES=3
+LLM_TEMPERATURE=0.3
+
+# Security - Required
+API_KEY=<generated-secure-key>
+CRON_SECRET=<generated-secure-token>
+```
+
+```bash frontend/.env.local
+# Backend WebSocket URL (secure)
+NEXT_PUBLIC_WS_URL=wss://api.yourdomain.com/ws/crawl
+```
+</CodeGroup>
+
+## Validation
+
+Verify your configuration:
+
+<Steps>
+  <Step title="Test backend health">
+    ```bash Health Check
+    curl http://localhost:8000/health
+    ```
+    
+    Expected response:
+    ```json
+    {"status": "ok"}
+    ```
+  </Step>
+  
+  <Step title="Test database connection">
+    If Supabase is configured, the backend will log:
+    ```
+    INFO: Supabase client initialized
+    ```
+  </Step>
+  
+  <Step title="Test R2 storage">
+    Generate a llms.txt file and verify the hosted URL is accessible.
+  </Step>
+  
+  <Step title="Test authentication">
+    ```bash Get Token
+    curl -X POST http://localhost:8000/auth/token \
+      -H "X-API-Key: your-api-key"
+    ```
+    
+    Should return a JWT token.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="CORS errors in browser console">
+    **Symptom:** `WebSocket connection failed: CORS error`
+    
+    **Solution:**
+    - Add your frontend URL to `CORS_ORIGINS` in backend `.env`
+    - Ensure URLs match exactly (including protocol and port)
+    - Restart the backend after changing `.env`
+    
+    ```bash Example
+    CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+    ```
+  </Accordion>
+  
+  <Accordion title="No hosted URL generated">
+    **Symptom:** Generated llms.txt shows but no public URL
+    
+    **Solution:**
+    - Verify all R2 configuration variables are set:
+      - `R2_ENDPOINT`
+      - `R2_ACCESS_KEY`
+      - `R2_SECRET_KEY`
+      - `R2_BUCKET`
+      - `R2_PUBLIC_DOMAIN`
+    - Verify the bucket exists in Cloudflare R2
+    - Check bucket permissions allow public reads
+  </Accordion>
+  
+  <Accordion title="Auto-update not working">
+    **Symptom:** Sites not recrawling on schedule
+    
+    **Solution:**
+    - Verify `SUPABASE_URL` and `SUPABASE_KEY` are set
+    - Check the `crawl_sites` table exists in Supabase
+    - Verify AWS Lambda/cron job is configured
+    - Check `CRON_SECRET` matches between backend and Lambda
+  </Accordion>
+  
+  <Accordion title="Brightdata crawls failing">
+    **Symptom:** "Failed to connect to Brightdata" errors
+    
+    **Solution:**
+    - Verify `BRIGHTDATA_API_KEY` (customer ID) is correct
+    - Verify `BRIGHTDATA_PASSWORD` matches your zone password
+    - Check `BRIGHTDATA_ZONE` exists in your Brightdata account
+    - Ensure you have credits/subscription active
+  </Accordion>
+  
+  <Accordion title="LLM enhancement not working">
+    **Symptom:** No enhancement despite enabling in UI
+    
+    **Solution:**
+    - Set `LLM_ENHANCEMENT_ENABLED=true` in backend `.env`
+    - Verify `OPENROUTER_API_KEY` is valid
+    - Check OpenRouter account has credits
+    - Review backend logs for LLM errors
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Environment Variables" icon="shield-halved">
+    Never hardcode secrets in source code. Always use environment variables.
+  </Card>
+  
+  <Card title="Rotate Keys Regularly" icon="key">
+    Change API keys, tokens, and secrets periodically (every 90 days).
+  </Card>
+  
+  <Card title="Separate Environments" icon="layer-group">
+    Use different credentials for development, staging, and production.
+  </Card>
+  
+  <Card title="Validate on Deploy" icon="check">
+    Test all endpoints after deployment to catch configuration issues early.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Web Interface" icon="browser" href="/guides/web-interface">
+    Learn how to use the web UI with your configuration
+  </Card>
+  
+  <Card title="API Usage" icon="code" href="/guides/api-usage">
+    Integrate programmatically using the WebSocket API
+  </Card>
+  
+  <Card title="Deployment" icon="rocket" href="/essentials/deployment">
+    Deploy to production with proper configuration
+  </Card>
+  
+  <Card title="Development" icon="code-branch" href="/development">
+    Set up a local development environment
+  </Card>
+</CardGroup>

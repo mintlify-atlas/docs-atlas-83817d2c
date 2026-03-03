@@ -1,80 +1,465 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get your first llms.txt file generated in 5 minutes with local development setup
 ---
 
-## Get started in three steps
+# Quick Start Guide
 
-Get your documentation site running locally and make your first customization.
+Get the llms.txt Generator running locally in under 5 minutes. This guide will walk you through setting up both the backend and frontend for development.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Before you begin, ensure you have the following installed:
 
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+<CardGroup cols={3}>
+  <Card title="Python 3.11+" icon="python">
+    Required for the FastAPI backend
+  </Card>
+  <Card title="Node.js 20+" icon="node-js">
+    Required for the Next.js frontend
+  </Card>
+  <Card title="Git" icon="git">
+    For cloning the repository
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  Docker is optional but recommended for simplified deployment. See the [Docker Setup](#docker-setup-optional) section below.
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the project to your local machine:
+    
+    ```bash
+    git clone <your-repo-url>
+    cd llmstxt
+    ```
+  </Step>
+
+  <Step title="Backend Setup">
+    Set up the Python environment and install dependencies:
+    
+    ```bash
+    cd backend
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    pip install -r requirements.txt
+    ```
+    
+    The `requirements.txt` includes:
+    
+    <CodeGroup>
+    ```txt requirements.txt
+    fastapi
+    uvicorn[standard]
+    httpx
+    beautifulsoup4
+    pydantic
+    pydantic-settings
+    python-dotenv
+    boto3
+    pytest
+    pytest-asyncio
+    supabase==2.10.0
+    playwright
+    PyJWT[crypto]
+    ```
+    </CodeGroup>
+    
+    Install Playwright browsers:
+    
+    ```bash
+    playwright install chromium
+    ```
+  </Step>
+
+  <Step title="Backend Environment Configuration">
+    Create your backend environment file:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` with your configuration:
+    
+    <CodeGroup>
+    ```bash .env
+    # CORS Configuration
+    CORS_ORIGINS=http://localhost:3000
+    
+    # Cloudflare R2 Storage (Required)
+    R2_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
+    R2_ACCESS_KEY=your-access-key
+    R2_SECRET_KEY=your-secret-key
+    R2_BUCKET=llms-txt
+    R2_PUBLIC_DOMAIN=https://your-public-domain.com
+    
+    # Supabase Database (Required)
+    SUPABASE_URL=https://your-project.supabase.co
+    SUPABASE_KEY=your-anon-key
+    
+    # Cron Secret for scheduled updates
+    CRON_SECRET=your-secret-token
+    
+    # Brightdata Proxy (Optional - for JS-heavy sites)
+    BRIGHTDATA_API_KEY=your-customer-id-here
+    BRIGHTDATA_ENABLED=true
+    BRIGHTDATA_ZONE=scraping_browser1
+    BRIGHTDATA_PASSWORD=your-zone-password-here
+    ```
+    </CodeGroup>
+    
+    <Warning>
+      At minimum, you need to configure R2 storage and Supabase. The Brightdata proxy is optional and only needed for JavaScript-heavy websites.
+    </Warning>
+  </Step>
+
+  <Step title="Frontend Setup">
+    In a new terminal, navigate to the frontend directory:
+    
+    ```bash
+    cd frontend
+    npm install
+    ```
+    
+    Create the frontend environment file:
+    
+    ```bash
+    cp .env.example .env.local
+    ```
+    
+    Edit `.env.local`:
+    
+    <CodeGroup>
+    ```bash .env.local
+    NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/crawl
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Start the Servers">
+    Start both servers in separate terminals:
+    
+    <CodeGroup>
+    ```bash Backend (Terminal 1)
+    cd backend
+    source venv/bin/activate
+    uvicorn main:app --reload --port 8000
+    ```
+    
+    ```bash Frontend (Terminal 2)
+    cd frontend
+    npm run dev
+    ```
+    </CodeGroup>
+    
+    You should see:
+    - Backend: `INFO:     Uvicorn running on http://127.0.0.1:8000`
+    - Frontend: `Ready on http://localhost:3000`
+  </Step>
+
+  <Step title="Access the Application">
+    Open your browser and navigate to:
+    
+    <CardGroup cols={3}>
+      <Card title="Frontend UI" icon="browser">
+        http://localhost:3000
+      </Card>
+      <Card title="Backend API" icon="code">
+        http://localhost:8000
+      </Card>
+      <Card title="API Docs" icon="book">
+        http://localhost:8000/docs
+      </Card>
+    </CardGroup>
+  </Step>
+</Steps>
+
+## Generate Your First llms.txt
+
+Now that everything is running, let's generate your first `llms.txt` file:
+
+<Steps>
+  <Step title="Open the Web Interface">
+    Navigate to http://localhost:3000 in your browser.
+  </Step>
+
+  <Step title="Enter a Website URL">
+    Enter a website URL you want to crawl. For testing, try:
+    - `https://docs.python.org`
+    - `https://fastapi.tiangolo.com`
+    - Your own documentation site
+  </Step>
+
+  <Step title="Configure Crawl Parameters">
+    Adjust the settings based on your needs:
+    
+    - **Max Pages**: Number of pages to crawl (default: 50)
+    - **Description Length**: Character limit for page excerpts (default: 500)
+    - **Enable Auto-Update**: Schedule periodic recrawls (optional)
+    - **Recrawl Interval**: Minutes between updates (default: 360)
+    - **LLM Enhancement**: AI-powered optimization (optional)
+    - **Use Brightdata**: For JavaScript-heavy sites (optional)
+  </Step>
+
+  <Step title="Start Crawling">
+    Click "Generate llms.txt" and watch the real-time progress in the log window.
+    
+    You'll see messages like:
+    ```
+    Starting crawl of https://example.com
+    Crawling page 1/50...
+    Crawling page 2/50...
+    Found 25 pages
+    Checking for .md versions of pages...
+    Found 3 pages with .md versions
+    ```
+  </Step>
+
+  <Step title="Get Your Results">
+    Once complete, you'll receive:
+    - Generated `llms.txt` content (viewable in browser)
+    - Download button for the file
+    - Public CDN URL for hosting
+    - Copy button for quick sharing
+  </Step>
+</Steps>
+
+## Understanding the WebSocket API
+
+The backend uses WebSockets for real-time communication. Here's how the protocol works:
+
+### Connection
+
+```javascript
+const ws = new WebSocket('ws://localhost:8000/ws/crawl?api_key=YOUR_KEY');
+```
+
+### Send Request
+
+<CodeGroup>
+```json Request Payload
+{
+  "url": "https://example.com",
+  "maxPages": 50,
+  "descLength": 500,
+  "enableAutoUpdate": false,
+  "recrawlIntervalMinutes": 360,
+  "llmEnhance": false,
+  "useBrightdata": false
+}
+```
+</CodeGroup>
+
+### Receive Messages
+
+The server sends different message types:
+
+<CodeGroup>
+```json Log Message
+{
+  "type": "log",
+  "content": "Crawling page 1/50..."
+}
+```
+
+```json Result Message
+{
+  "type": "result",
+  "content": "# Example.com\n\n## Overview\n\n> Example page description...\n"
+}
+```
+
+```json URL Message
+{
+  "type": "url",
+  "content": "https://pub-xxx.r2.dev/llms.txt"
+}
+```
+
+```json Error Message
+{
+  "type": "error",
+  "content": "Failed to fetch page: Connection timeout"
+}
+```
+</CodeGroup>
+
+### Implementation Example
+
+Here's the core WebSocket handler from the backend:
+
+<CodeGroup>
+```python main.py
+@app.websocket("/ws/crawl")
+async def websocket_crawl(websocket: WebSocket):
+    # Validate API key
+    api_key = websocket.query_params.get("api_key")
+    if api_key != settings.api_key:
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
+    await websocket.accept()
+
+    try:
+        # Receive configuration
+        data = await websocket.receive_text()
+        payload = json.loads(data)
+
+        url = str(payload['url'])
+        max_pages = payload.get('maxPages', 50)
+        desc_length = payload.get('descLength', 500)
+
+        # Log function for real-time updates
+        async def log(message: str):
+            await websocket.send_json({"type": "log", "content": message})
+
+        # Start crawling
+        crawler = LLMCrawler(
+            url,
+            max_pages,
+            desc_length,
+            log,
+            brightdata_enabled=payload.get('useBrightdata', False)
+        )
+        pages = await crawler.run()
+
+        # Format output
+        llms_txt = format_llms_txt(url, pages, md_url_map)
+
+        # Send result
+        await websocket.send_json({"type": "result", "content": llms_txt})
+
+        # Save to storage
+        hosted_url = await save_llms_txt(url, llms_txt, log)
+        await websocket.send_json({"type": "url", "content": hosted_url})
+
+    except Exception as e:
+        await websocket.send_json({"type": "error", "content": str(e)})
+    finally:
+        await websocket.close()
+```
+</CodeGroup>
+
+## Docker Setup (Optional)
+
+For a simpler setup, use Docker Compose:
+
+<Steps>
+  <Step title="Configure Environment Files">
+    Create `.env` files as described in steps 3-4 above.
+  </Step>
+
+  <Step title="Start Services">
+    ```bash
+    docker-compose up -d
+    ```
+    
+    This starts both backend and frontend:
+    
+    <CodeGroup>
+    ```yaml docker-compose.yml
+    version: "3.9"
+
+    services:
+      backend:
+        build: ./backend
+        ports:
+          - "8000:8000"
+        env_file:
+          - ./backend/.env
+        restart: unless-stopped
+
+      frontend:
+        build: ./frontend
+        ports:
+          - "3000:3000"
+        env_file:
+          - ./frontend/.env.local
+        environment:
+          - NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/crawl
+        restart: unless-stopped
+        depends_on:
+          - backend
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Access the Application">
+    Same URLs as manual setup:
+    - Frontend: http://localhost:3000
+    - Backend: http://localhost:8000
+    - API Docs: http://localhost:8000/docs
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Backend won't start - ModuleNotFoundError">
+    Make sure you've activated the virtual environment and installed dependencies:
+    
+    ```bash
+    cd backend
+    source venv/bin/activate
+    pip install -r requirements.txt
+    ```
+  </Accordion>
+
+  <Accordion title="Playwright browser not found">
+    Install Playwright browsers:
+    
+    ```bash
+    playwright install chromium
+    ```
+  </Accordion>
+
+  <Accordion title="WebSocket connection fails">
+    Verify:
+    1. Backend is running on port 8000
+    2. CORS_ORIGINS includes your frontend URL
+    3. API key is configured (if required)
+    4. Check browser console for error messages
+  </Accordion>
+
+  <Accordion title="R2 storage errors">
+    Ensure your R2 credentials are correct:
+    - Endpoint URL format: `https://<account-id>.r2.cloudflarestorage.com`
+    - Access key and secret key are valid
+    - Bucket exists and is accessible
+    - Public domain is configured correctly
+  </Accordion>
+
+  <Accordion title="Frontend can't connect to backend">
+    Check `NEXT_PUBLIC_WS_URL` in `.env.local`:
+    - Should be `ws://localhost:8000/ws/crawl` for local development
+    - Use `wss://` for production with HTTPS
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration Guide" icon="gear" href="/guides/configuration">
+    Learn about all configuration options and environment variables
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/websocket">
+    Explore the full API documentation and endpoints
+  </Card>
+  
+  <Card title="Deployment" icon="cloud" href="/deployment/overview">
+    Deploy to AWS with Terraform for production use
+  </Card>
+  
+  <Card title="Architecture" icon="diagram" href="/architecture/overview">
+    Deep dive into system architecture and components
+  </Card>
+</CardGroup>
+
+<Note>
+  For production deployment, see the [Deployment Guide](/deployment) which covers AWS ECS, Lambda, and infrastructure setup with Terraform.
 </Note>

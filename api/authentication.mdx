@@ -1,0 +1,253 @@
+---
+title: 'Authentication'
+description: 'Generate short-lived JWT tokens for WebSocket authentication'
+---
+
+## Overview
+
+The authentication endpoint generates short-lived JWT tokens that can be used to authenticate WebSocket connections. This is the recommended authentication method for production use, as it provides time-limited access tokens instead of exposing long-lived API keys.
+
+## Endpoint
+
+```
+POST /auth/token
+```
+
+## Authentication
+
+This endpoint requires authentication via the `X-API-Key` header:
+
+<ParamField header="X-API-Key" type="string" required>
+  Your API key configured in the backend's `API_KEY` environment variable.
+</ParamField>
+
+## Request
+
+No request body is required. Authentication is handled entirely through the header.
+
+### Example Request
+
+```bash
+curl -X POST https://api.example.com/auth/token \
+  -H "X-API-Key: your-api-key-here"
+```
+
+```javascript
+const response = await fetch('https://api.example.com/auth/token', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': 'your-api-key-here'
+  }
+});
+
+const data = await response.json();
+console.log('Token:', data.token);
+```
+
+```python
+import httpx
+
+response = httpx.post(
+    "https://api.example.com/auth/token",
+    headers={"X-API-Key": "your-api-key-here"}
+)
+
+data = response.json()
+print(f"Token: {data['token']}")
+```
+
+## Response
+
+### Success Response (200)
+
+<ResponseField name="token" type="string">
+  A JWT token encoded using HS256 algorithm. Valid for 5 minutes from issuance.
+</ResponseField>
+
+<ResponseField name="expires_in" type="integer">
+  Token expiration time in seconds (always `300` for 5 minutes).
+</ResponseField>
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MDk1NjM4MDAsImlhdCI6MTcwOTU2MzUwMCwidHlwZSI6IndlYnNvY2tldCJ9.signature",
+  "expires_in": 300
+}
+```
+
+### Error Response (401)
+
+Returned when the API key is missing, invalid, or doesn't match the configured value.
+
+```json
+{
+  "detail": "Unauthorized"
+}
+```
+
+## JWT Token Structure
+
+The generated JWT token contains the following payload:
+
+<ResponseField name="exp" type="integer">
+  Expiration timestamp (Unix timestamp). Token expires 5 minutes after issuance.
+</ResponseField>
+
+<ResponseField name="iat" type="integer">
+  Issued-at timestamp (Unix timestamp). When the token was created.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Token type, always `"websocket"` for WebSocket authentication.
+</ResponseField>
+
+### Example Decoded Token
+
+```json
+{
+  "exp": 1709563800,
+  "iat": 1709563500,
+  "type": "websocket"
+}
+```
+
+## Token Usage
+
+Once you have a token, use it to authenticate WebSocket connections:
+
+```
+ws://api.example.com/ws/crawl?token=YOUR_JWT_TOKEN
+```
+
+### Complete Authentication Flow
+
+```javascript
+// Step 1: Get JWT token
+const tokenResponse = await fetch('https://api.example.com/auth/token', {
+  method: 'POST',
+  headers: { 'X-API-Key': 'your-api-key-here' }
+});
+
+const { token, expires_in } = await tokenResponse.json();
+
+// Step 2: Connect to WebSocket with token
+const ws = new WebSocket(`wss://api.example.com/ws/crawl?token=${token}`);
+
+ws.onopen = () => {
+  // Send crawl request
+  ws.send(JSON.stringify({
+    url: 'https://docs.example.com',
+    maxPages: 50
+  }));
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  console.log('Received:', message);
+};
+```
+
+## Token Expiration
+
+Tokens are valid for **5 minutes** (300 seconds) from the time of issuance. This is configured in `/backend/jwt_auth.py:6`.
+
+<Warning>
+Tokens cannot be refreshed. When a token expires, you must request a new one from the `/auth/token` endpoint.
+</Warning>
+
+### Handling Expiration
+
+```javascript
+let currentToken = null;
+let tokenExpiry = null;
+
+async function getValidToken() {
+  // Check if current token is still valid (with 30s buffer)
+  if (currentToken && tokenExpiry && Date.now() < tokenExpiry - 30000) {
+    return currentToken;
+  }
+  
+  // Request new token
+  const response = await fetch('https://api.example.com/auth/token', {
+    method: 'POST',
+    headers: { 'X-API-Key': process.env.API_KEY }
+  });
+  
+  const data = await response.json();
+  currentToken = data.token;
+  tokenExpiry = Date.now() + (data.expires_in * 1000);
+  
+  return currentToken;
+}
+
+// Use the token
+const token = await getValidToken();
+const ws = new WebSocket(`wss://api.example.com/ws/crawl?token=${token}`);
+```
+
+## Security Considerations
+
+### Why Use JWT Tokens?
+
+1. **Time-limited access**: Tokens expire after 5 minutes, reducing the window of exposure if compromised
+2. **Separation of concerns**: API keys are only sent to the auth endpoint, not the WebSocket
+3. **Audit trail**: Each token has an issuance timestamp for tracking
+4. **Revocation**: Changing the API key invalidates all existing tokens
+
+### Token Security Best Practices
+
+1. **Never expose tokens in URLs** that might be logged (use WSS protocol, query params are encrypted)
+2. **Store API keys securely** using environment variables or secret managers
+3. **Use HTTPS/WSS** for all connections to prevent token interception
+4. **Rotate API keys** periodically to invalidate old tokens
+5. **Request new tokens** for each WebSocket session rather than reusing
+
+## Configuration
+
+The authentication system requires the following environment variable:
+
+```bash
+# Backend .env
+API_KEY=your-secure-api-key-here
+```
+
+Generate a secure API key:
+
+```bash
+openssl rand -base64 32
+```
+
+## Error Codes
+
+| Status Code | Description | Reason |
+|-------------|-------------|--------|
+| 200 | Success | Valid API key, token generated |
+| 401 | Unauthorized | Missing or invalid `X-API-Key` header |
+| 500 | Internal Server Error | Token generation failed (rare) |
+
+## Alternative Authentication
+
+If you don't want to use JWT tokens, you can authenticate directly with the API key on the WebSocket:
+
+```
+ws://api.example.com/ws/crawl?api_key=YOUR_API_KEY
+```
+
+<Warning>
+Direct API key authentication is **not recommended** for production as it exposes your long-lived credentials on every connection.
+</Warning>
+
+## Implementation Details
+
+The token generation is implemented in `/backend/jwt_auth.py:8-14`:
+
+- Algorithm: **HS256** (HMAC with SHA-256)
+- Secret: Your `API_KEY` environment variable
+- Expiry: **5 minutes** from issuance
+- Claims: `exp`, `iat`, `type`
+
+Token validation happens in `/backend/jwt_auth.py:16-23` and is called by the WebSocket endpoint at `/backend/main.py:94`.
+
+## Related Endpoints
+
+- [WebSocket Crawl](/api/websocket) - Use tokens to authenticate WebSocket connections

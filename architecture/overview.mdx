@@ -1,0 +1,147 @@
+---
+title: 'Architecture Overview'
+description: 'High-level architecture and system design of the llms.txt Generator'
+icon: 'sitemap'
+---
+
+## System Architecture
+
+The llms.txt Generator is a production-grade distributed system that automatically generates and maintains `llms.txt` files for websites. The architecture follows a microservices pattern with clear separation between the web frontend, API backend, and automated recrawl services.
+
+### Architecture Diagram
+
+```
+┌─────────────────┐
+│   Next.js UI    │  (Vercel)
+│   WebSocket     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  FastAPI API    │  (AWS ECS Fargate)
+│  WebSocket      │  ← CloudFlare Tunnel
+└────────┬────────┘
+         │
+    ┌────┴────────────────┐
+    │                     │
+    ▼                     ▼
+┌──────────┐      ┌──────────────┐
+│ Crawler  │      │   Storage    │
+│ Playwright      │   Supabase   │
+│ Brightdata      │   R2 CDN     │
+└──────────┘      └──────────────┘
+         ▲
+         │
+    ┌────┴────┐
+    │ Lambda  │  (Scheduled Recrawls)
+    │ Cron    │  EventBridge: Every 6h
+    └─────────┘
+```
+
+## Core Components
+
+<CardGroup cols={2}>
+  <Card title="Frontend (Next.js)" icon="browser">
+    - **Hosting**: Vercel
+    - **Framework**: Next.js 15 with TypeScript
+    - **Communication**: WebSocket API for real-time updates
+    - **UI**: Tailwind CSS for responsive design
+  </Card>
+
+  <Card title="Backend (FastAPI)" icon="server">
+    - **Hosting**: AWS ECS Fargate containers
+    - **Framework**: Python 3.11 + FastAPI
+    - **Protocol**: WebSocket for bidirectional communication
+    - **Load Balancing**: Application Load Balancer (ALB)
+  </Card>
+
+  <Card title="Crawler Engine" icon="spider">
+    - **Browser Automation**: Playwright (Chromium)
+    - **JS-Heavy Sites**: Brightdata proxy integration
+    - **Algorithm**: BFS traversal with sitemap detection
+    - **Content Extraction**: BeautifulSoup4 for HTML parsing
+  </Card>
+
+  <Card title="Storage Layer" icon="database">
+    - **Database**: Supabase (PostgreSQL)
+    - **Object Storage**: Cloudflare R2
+    - **Public CDN**: R2 public domain for llms.txt files
+    - **Persistence**: Crawl metadata and scheduling data
+  </Card>
+</CardGroup>
+
+## Component Interactions
+
+### User-Initiated Crawl Flow
+
+1. **User submits** a website URL through the Next.js frontend
+2. **WebSocket connection** established with FastAPI backend
+3. **Crawler engine** performs BFS traversal or sitemap-based crawl
+4. **Real-time logs** streamed back to frontend via WebSocket
+5. **Generated llms.txt** saved to R2 storage
+6. **Public URL** returned to user for immediate access
+7. **Metadata saved** to Supabase for scheduled updates (if enabled)
+
+### Automated Recrawl Flow
+
+1. **EventBridge rule** triggers Lambda function every 6 hours
+2. **Lambda queries** Supabase for sites due for recrawl
+3. **HTTP POST** sent to FastAPI `/internal/cron/recrawl` endpoint
+4. **Background task** processes each site sequentially
+5. **Updated llms.txt** saved to R2, replacing previous version
+6. **Metadata updated** in Supabase with new timestamp
+
+<Info>
+  The system supports both on-demand and scheduled crawling, ensuring llms.txt files stay synchronized with website changes.
+</Info>
+
+## Design Principles
+
+### Scalability
+
+- **Containerized deployment** on ECS Fargate allows horizontal scaling
+- **Auto-scaling** based on CPU/memory utilization
+- **Stateless API design** enables multiple backend instances
+- **Queue-based crawling** prevents memory overflow on large sites
+
+### Reliability
+
+- **Health checks** at ALB and ECS task levels
+- **Automatic failover** for unhealthy containers
+- **Retry logic** for failed page fetches (3x max pages attempted)
+- **CloudWatch monitoring** for logs and metrics
+
+### Security
+
+- **API key authentication** for WebSocket endpoints
+- **JWT token support** for time-limited access
+- **CORS protection** with configurable origins
+- **TLS/SSL encryption** for all traffic (HTTPS/WSS)
+- **Secrets management** via environment variables
+
+### Performance
+
+- **Concurrent crawling** with asyncio for I/O-bound operations
+- **CDN delivery** of generated llms.txt files via R2
+- **Sitemap detection** for faster discovery of pages
+- **Brightdata integration** for JavaScript-heavy sites
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Technology Stack" icon="layer-group" href="/architecture/tech-stack">
+    Detailed breakdown of backend, frontend, and infrastructure technologies
+  </Card>
+
+  <Card title="Infrastructure" icon="aws" href="/architecture/infrastructure">
+    AWS infrastructure components and Terraform configuration
+  </Card>
+
+  <Card title="Data Flow" icon="diagram-project" href="/architecture/data-flow">
+    Step-by-step data flow from crawl request to llms.txt generation
+  </Card>
+
+  <Card title="Deployment Guide" icon="rocket" href="/deployment/overview">
+    Complete deployment instructions for production
+  </Card>
+</CardGroup>

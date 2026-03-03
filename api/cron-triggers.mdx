@@ -1,0 +1,353 @@
+---
+title: 'Cron Recrawl Trigger'
+description: 'Internal endpoint for scheduled automatic recrawls'
+---
+
+## Overview
+
+The cron recrawl endpoint triggers automatic recrawls of all sites that are due for updates. This is an internal endpoint designed to be called by scheduled tasks (AWS Lambda, GitHub Actions, cron jobs, etc.) to maintain up-to-date `llms.txt` files for enrolled sites.
+
+<Info>
+This endpoint runs recrawls in the background and returns immediately. It does not wait for crawls to complete.
+</Info>
+
+## Endpoint
+
+```
+POST /internal/cron/recrawl
+```
+
+## Authentication
+
+This endpoint requires authentication via the `X-Cron-Secret` header:
+
+<ParamField header="X-Cron-Secret" type="string" required>
+  Secret token configured in the backend's `CRON_SECRET` environment variable. This prevents unauthorized triggering of recrawls.
+</ParamField>
+
+## Request
+
+No request body is required. Authentication is handled entirely through the header.
+
+### Example Request
+
+```bash
+curl -X POST https://api.example.com/internal/cron/recrawl \
+  -H "X-Cron-Secret: your-cron-secret-here"
+```
+
+```javascript
+const response = await fetch('https://api.example.com/internal/cron/recrawl', {
+  method: 'POST',
+  headers: {
+    'X-Cron-Secret': process.env.CRON_SECRET
+  }
+});
+
+const data = await response.json();
+console.log(data.message);
+```
+
+```python
+import httpx
+
+response = httpx.post(
+    "https://api.example.com/internal/cron/recrawl",
+    headers={"X-Cron-Secret": "your-cron-secret"}
+)
+
+print(response.json())
+```
+
+## Response
+
+### Success Response (200)
+
+<ResponseField name="status" type="string">
+  Always `"triggered"` when the recrawl background task is successfully queued.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable confirmation message.
+</ResponseField>
+
+```json
+{
+  "status": "triggered",
+  "message": "Recrawl started in background"
+}
+```
+
+<Warning>
+The endpoint returns immediately after queuing the background task. It does not wait for recrawls to complete or report their results.
+</Warning>
+
+### Error Response (401)
+
+Returned when the cron secret is missing, invalid, or doesn't match the configured value.
+
+```json
+{
+  "detail": "Unauthorized"
+}
+```
+
+## How It Works
+
+### 1. Site Selection
+
+The recrawl process:
+
+1. Queries the `crawl_sites` table for sites where `next_crawl_at <= NOW()`
+2. Retrieves site configuration (`max_pages`, `desc_length`, `recrawl_interval_minutes`)
+3. Processes each site sequentially
+
+### 2. Change Detection
+
+For each site, the system:
+
+1. **Checks sentinel URL** (typically `sitemap.xml`) for changes
+2. **Compares hash** of new content with stored `latest_llms_hash`
+3. **Skips crawl** if content hasn't changed (optimization)
+4. **Full recrawl** if changes detected or sentinel unavailable
+
+### 3. Scheduling
+
+After each check:
+
+- **Content unchanged**: Updates `next_crawl_at` based on `recrawl_interval_minutes`
+- **Content changed**: Regenerates `llms.txt`, uploads to R2, updates database
+- **Adaptive scheduling**: Adjusts interval based on change frequency (future feature)
+
+## Background Task
+
+The recrawl logic is implemented in `/backend/main.py:37-43` as a FastAPI background task:
+
+```python
+async def run_recrawl_in_background():
+    try:
+        print("[RECRAWL] Starting background recrawl...")
+        results = await recrawl_due_sites()
+        print(f"[RECRAWL] Completed: {results}")
+    except Exception as e:
+        print(f"[RECRAWL] Error: {e}")
+```
+
+The actual recrawl implementation is in `/backend/recrawl.py`.
+
+## Scheduling Examples
+
+### AWS Lambda + EventBridge
+
+**Lambda Function** (`lambda_handler.py`):
+```python
+import httpx
+import os
+
+def lambda_handler(event, context):
+    response = httpx.post(
+        os.environ['API_URL'] + '/internal/cron/recrawl',
+        headers={'X-Cron-Secret': os.environ['CRON_SECRET']},
+        timeout=30
+    )
+    
+    return {
+        'statusCode': response.status_code,
+        'body': response.text
+    }
+```
+
+**EventBridge Rule** (Terraform):
+```hcl
+resource "aws_cloudwatch_event_rule" "recrawl" {
+  name                = "llmstxt-recrawl"
+  description         = "Trigger recrawl every 6 hours"
+  schedule_expression = "rate(6 hours)"
+}
+
+resource "aws_cloudwatch_event_target" "lambda" {
+  rule      = aws_cloudwatch_event_rule.recrawl.name
+  target_id = "RecrawlLambda"
+  arn       = aws_lambda_function.recrawl.arn
+}
+```
+
+### GitHub Actions
+
+```yaml
+name: Scheduled Recrawl
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allow manual triggers
+
+jobs:
+  recrawl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Recrawl
+        run: |
+          curl -X POST ${{ secrets.API_URL }}/internal/cron/recrawl \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}"
+```
+
+### Vercel Cron
+
+**vercel.json**:
+```json
+{
+  "crons": [{
+    "path": "/api/trigger-recrawl",
+    "schedule": "0 */6 * * *"
+  }]
+}
+```
+
+**pages/api/trigger-recrawl.ts**:
+```typescript
+import type { NextApiRequest, NextApiResponse } from 'next';
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  // Verify Vercel cron secret
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const response = await fetch(
+    `${process.env.BACKEND_URL}/internal/cron/recrawl`,
+    {
+      method: 'POST',
+      headers: { 'X-Cron-Secret': process.env.CRON_SECRET! }
+    }
+  );
+
+  const data = await response.json();
+  res.status(response.status).json(data);
+}
+```
+
+### Traditional Cron
+
+```bash
+# /etc/crontab
+# Run every 6 hours
+0 */6 * * * curl -X POST https://api.example.com/internal/cron/recrawl \
+  -H "X-Cron-Secret: $CRON_SECRET"
+```
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Backend .env
+CRON_SECRET=your-secure-cron-secret-here
+
+# Database connection (required for recrawls)
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_KEY=your-anon-key
+
+# Storage (required for uploading updated llms.txt)
+R2_ENDPOINT=https://xxx.r2.cloudflarestorage.com
+R2_ACCESS_KEY=your-access-key
+R2_SECRET_KEY=your-secret-key
+R2_BUCKET=llms-txt
+R2_PUBLIC_DOMAIN=https://pub-xxx.r2.dev
+```
+
+Generate a secure cron secret:
+
+```bash
+openssl rand -base64 32
+```
+
+### Recrawl Intervals
+
+When users enable auto-update via the WebSocket endpoint, they can specify:
+
+- **Default**: 10080 minutes (7 days)
+- **Common values**: 
+  - 360 minutes (6 hours)
+  - 1440 minutes (1 day)
+  - 10080 minutes (7 days)
+
+The cron job should run more frequently than the shortest interval you want to support.
+
+## Monitoring
+
+Check logs to monitor recrawl status:
+
+```bash
+# AWS CloudWatch
+aws logs tail /ecs/llmstxt-api --follow --filter-pattern "RECRAWL"
+
+# Docker logs
+docker logs -f llmstxt-backend | grep RECRAWL
+```
+
+Expected log output:
+```
+[RECRAWL] Starting background recrawl...
+[RECRAWL] Completed: {'checked': 15, 'updated': 3, 'skipped': 12, 'errors': 0}
+```
+
+## Database Schema
+
+The endpoint relies on the `crawl_sites` table structure:
+
+```sql
+CREATE TABLE crawl_sites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    base_url TEXT UNIQUE NOT NULL,
+    recrawl_interval_minutes INTEGER DEFAULT 10080,
+    max_pages INTEGER DEFAULT 50,
+    desc_length INTEGER DEFAULT 500,
+    last_crawled_at TIMESTAMP WITH TIME ZONE,
+    next_crawl_at TIMESTAMP WITH TIME ZONE,
+    latest_llms_hash TEXT,
+    latest_llms_url TEXT,
+    sentinel_url TEXT,
+    sitemap_newest_lastmod TIMESTAMP WITH TIME ZONE,
+    avg_change_interval_minutes FLOAT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+Key fields:
+- `next_crawl_at`: Determines if site is due for recrawl
+- `latest_llms_hash`: Used for change detection
+- `sentinel_url`: Quick check endpoint (usually sitemap.xml)
+
+## Error Codes
+
+| Status Code | Description | Reason |
+|-------------|-------------|--------|
+| 200 | Success | Recrawl task queued successfully |
+| 401 | Unauthorized | Missing or invalid `X-Cron-Secret` header |
+| 503 | Service Unavailable | Database connection failed (rare) |
+
+## Performance Considerations
+
+1. **Background Processing**: Returns immediately, doesn't block
+2. **Sequential Crawling**: Processes sites one at a time to manage resources
+3. **Smart Skipping**: Avoids full crawls when content unchanged
+4. **Timeout Handling**: Long-running crawls may timeout; monitor logs
+
+## Best Practices
+
+1. **Run frequently**: Schedule every 1-6 hours to ensure timely updates
+2. **Monitor logs**: Set up alerts for recrawl errors
+3. **Secure the secret**: Use environment variables, never commit to git
+4. **Idempotent calls**: Safe to call multiple times; won't duplicate work
+5. **Database backups**: Ensure Supabase backups are enabled
+
+## Related Endpoints
+
+- [WebSocket Crawl](/api/websocket) - Enable auto-update when generating llms.txt
+- [Webhooks](/api/webhooks) - Trigger immediate recrawl for specific site

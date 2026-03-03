@@ -1,0 +1,336 @@
+---
+title: "AWS Setup"
+description: "Configure AWS CLI and identify network resources for deployment"
+---
+
+## AWS CLI Configuration
+
+Configure the AWS CLI with your credentials to enable Terraform and Docker to interact with AWS services.
+
+### Configure AWS Credentials
+
+Run the AWS configuration wizard:
+
+```bash
+aws configure
+```
+
+You'll be prompted for the following information:
+
+<Steps>
+  <Step title="AWS Access Key ID">
+    Enter the Access Key ID from your IAM user:
+    ```
+    AWS Access Key ID [None]: AKIAIOSFODNN7EXAMPLE
+    ```
+  </Step>
+  
+  <Step title="AWS Secret Access Key">
+    Enter the Secret Access Key from your IAM user:
+    ```
+    AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    ```
+  </Step>
+  
+  <Step title="Default Region">
+    Choose your preferred AWS region (us-east-1 recommended):
+    ```
+    Default region name [None]: us-east-1
+    ```
+  </Step>
+  
+  <Step title="Output Format">
+    Set output format to JSON:
+    ```
+    Default output format [None]: json
+    ```
+  </Step>
+</Steps>
+
+### Verify AWS Access
+
+Confirm your AWS credentials are correctly configured:
+
+```bash
+aws sts get-caller-identity
+```
+
+Expected output:
+```json
+{
+    "UserId": "AIDAI...",
+    "Account": "123456789012",
+    "Arn": "arn:aws:iam::123456789012:user/your-username"
+}
+```
+
+<Check>
+  If you see your account information, AWS CLI is properly configured!
+</Check>
+
+<Warning>
+  If you receive an authentication error, double-check your Access Key ID and Secret Access Key.
+</Warning>
+
+## AWS Region Selection
+
+Choose the AWS region closest to your users for optimal performance.
+
+### Recommended Regions
+
+| Region | Location | Region Code |
+|--------|----------|-------------|
+| US East (N. Virginia) | North America | `us-east-1` |
+| US West (Oregon) | North America | `us-west-2` |
+| EU (Ireland) | Europe | `eu-west-1` |
+| EU (Frankfurt) | Europe | `eu-central-1` |
+| Asia Pacific (Singapore) | Asia | `ap-southeast-1` |
+| Asia Pacific (Tokyo) | Asia | `ap-northeast-1` |
+
+<Note>
+  This guide uses `us-east-1` in examples. Replace with your chosen region throughout the deployment.
+</Note>
+
+## VPC and Subnet Configuration
+
+ECS Fargate requires a VPC and at least **2 subnets in different availability zones** for high availability.
+
+### Option 1: Use Default VPC (Recommended)
+
+Most AWS accounts have a default VPC that works out of the box.
+
+#### Get Default VPC ID
+
+```bash
+aws ec2 describe-vpcs \
+  --filters "Name=isDefault,Values=true" \
+  --query "Vpcs[0].VpcId" \
+  --output text
+```
+
+Expected output:
+```
+vpc-0a1b2c3d4e5f6g7h8
+```
+
+<Note>
+  Save this VPC ID - you'll need it for Terraform configuration.
+</Note>
+
+#### Get Default Subnets
+
+Retrieve all subnets in your default VPC:
+
+```bash
+# Replace vpc-xxxxx with your VPC ID from above
+aws ec2 describe-subnets \
+  --filters "Name=vpc-id,Values=vpc-0a1b2c3d4e5f6g7h8" \
+  --query "Subnets[*].[SubnetId,AvailabilityZone,CidrBlock]" \
+  --output table
+```
+
+Expected output:
+```
+----------------------------------------------------------
+|                    DescribeSubnets                     |
++----------------------+-------------+-------------------+
+|  subnet-abc123def456 |  us-east-1a |  172.31.0.0/20   |
+|  subnet-ghi789jkl012 |  us-east-1b |  172.31.16.0/20  |
+|  subnet-mno345pqr678 |  us-east-1c |  172.31.32.0/20  |
++----------------------+-------------+-------------------+
+```
+
+<Check>
+  Select **at least 2 subnets** from **different availability zones** (e.g., us-east-1a and us-east-1b).
+</Check>
+
+Example subnet selection:
+```bash
+# Save these subnet IDs
+SUBNET_1="subnet-abc123def456"  # us-east-1a
+SUBNET_2="subnet-ghi789jkl012"  # us-east-1b
+```
+
+### Option 2: Create Custom VPC
+
+<Accordion title="Advanced: Create a new VPC for the project">
+  If you prefer to isolate the llms.txt Generator in its own VPC:
+
+  #### Create VPC
+
+  ```bash
+  aws ec2 create-vpc \
+    --cidr-block 10.0.0.0/16 \
+    --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=llmstxt-vpc}]' \
+    --query 'Vpc.VpcId' \
+    --output text
+  ```
+
+  #### Enable DNS Hostnames
+
+  ```bash
+  # Replace vpc-xxxxx with your new VPC ID
+  aws ec2 modify-vpc-attribute \
+    --vpc-id vpc-xxxxx \
+    --enable-dns-hostnames
+  ```
+
+  #### Create Subnets
+
+  ```bash
+  # Subnet 1 (us-east-1a)
+  aws ec2 create-subnet \
+    --vpc-id vpc-xxxxx \
+    --cidr-block 10.0.1.0/24 \
+    --availability-zone us-east-1a \
+    --tag-specifications 'ResourceType=subnet,Tags=[{Key=Name,Value=llmstxt-subnet-1a}]'
+
+  # Subnet 2 (us-east-1b)
+  aws ec2 create-subnet \
+    --vpc-id vpc-xxxxx \
+    --cidr-block 10.0.2.0/24 \
+    --availability-zone us-east-1b \
+    --tag-specifications 'ResourceType=subnet,Tags=[{Key=Name,Value=llmstxt-subnet-1b}]'
+  ```
+
+  #### Create Internet Gateway
+
+  ```bash
+  # Create gateway
+  IGW_ID=$(aws ec2 create-internet-gateway \
+    --tag-specifications 'ResourceType=internet-gateway,Tags=[{Key=Name,Value=llmstxt-igw}]' \
+    --query 'InternetGateway.InternetGatewayId' \
+    --output text)
+
+  # Attach to VPC
+  aws ec2 attach-internet-gateway \
+    --internet-gateway-id $IGW_ID \
+    --vpc-id vpc-xxxxx
+  ```
+
+  #### Configure Route Table
+
+  ```bash
+  # Get main route table
+  RTB_ID=$(aws ec2 describe-route-tables \
+    --filters "Name=vpc-id,Values=vpc-xxxxx" \
+    --query 'RouteTables[0].RouteTableId' \
+    --output text)
+
+  # Add route to internet gateway
+  aws ec2 create-route \
+    --route-table-id $RTB_ID \
+    --destination-cidr-block 0.0.0.0/0 \
+    --gateway-id $IGW_ID
+  ```
+
+  <Note>
+    If creating a custom VPC, update the security group configuration in Terraform to allow outbound internet access.
+  </Note>
+</Accordion>
+
+## Network Configuration Summary
+
+Before proceeding, ensure you have identified:
+
+<AccordionGroup>
+  <Accordion title="VPC Information">
+    - **VPC ID**: `vpc-xxxxxxxxxxxxx`
+    - **Region**: `us-east-1` (or your chosen region)
+    - **Internet Access**: Enabled (via Internet Gateway)
+  </Accordion>
+
+  <Accordion title="Subnet Information">
+    - **Subnet 1 ID**: `subnet-xxxxxxxxxxxxx`
+    - **Subnet 1 AZ**: `us-east-1a`
+    - **Subnet 2 ID**: `subnet-yyyyyyyyyyyyy`
+    - **Subnet 2 AZ**: `us-east-1b`
+    
+    <Warning>
+      Subnets **must** be in different availability zones for ECS high availability.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="DNS Resolution">
+    - **DNS Hostnames**: Enabled
+    - **DNS Resolution**: Enabled
+    
+    Verify with:
+    ```bash
+    aws ec2 describe-vpc-attribute \
+      --vpc-id vpc-xxxxx \
+      --attribute enableDnsHostnames
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+### IAM Permissions
+
+The IAM user or role running Terraform needs these permissions:
+
+<Accordion title="Required IAM Policies">
+  - **EC2**: Full access (VPC, subnets, security groups)
+  - **ECS**: Full access (clusters, services, task definitions)
+  - **ECR**: Full access (repositories, images)
+  - **IAM**: Create/manage roles and policies
+  - **Application Load Balancer**: Full access
+  - **CloudWatch**: Logs and metrics
+  - **Lambda**: Full access
+  - **EventBridge**: Full access
+  - **ACM**: Certificate management
+  - **S3**: Bucket creation and object storage
+
+  For production, use a more restrictive custom policy. For initial deployment, `AdministratorAccess` simplifies setup.
+</Accordion>
+
+### AWS Service Limits
+
+Check your AWS account limits for key services:
+
+```bash
+# Check VPC limits
+aws service-quotas get-service-quota \
+  --service-code vpc \
+  --quota-code L-F678F1CE
+
+# Check ECS limits
+aws service-quotas get-service-quota \
+  --service-code ecs \
+  --quota-code L-D78D97F6
+```
+
+<Note>
+  Default limits are typically sufficient. Request increases if you plan to run multiple environments.
+</Note>
+
+## Testing Network Connectivity
+
+### Verify Subnet Internet Access
+
+Ensure your subnets can reach the internet (required for ECS to pull Docker images):
+
+```bash
+# Check route tables
+aws ec2 describe-route-tables \
+  --filters "Name=vpc-id,Values=vpc-xxxxx" \
+  --query "RouteTables[*].Routes[?GatewayId!=null]"
+```
+
+You should see a route to an Internet Gateway (`igw-xxxxx`):
+```json
+[
+  {
+    "DestinationCidrBlock": "0.0.0.0/0",
+    "GatewayId": "igw-xxxxxxxxxxxxx",
+    "State": "active"
+  }
+]
+```
+
+## Next Steps
+
+<Card title="Database & Storage Setup" icon="database" href="/deployment/database-storage">
+  Configure Supabase database and Cloudflare R2 storage
+</Card>

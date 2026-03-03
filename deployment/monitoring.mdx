@@ -1,0 +1,559 @@
+---
+title: "Monitoring & Logs"
+description: "Monitor your deployment with CloudWatch logs, metrics, and alerts"
+---
+
+## Overview
+
+The Terraform deployment includes comprehensive monitoring with CloudWatch logs, metrics, alarms, and a dashboard. This section covers accessing logs, understanding alerts, and monitoring system health.
+
+### Monitoring Components
+
+<CardGroup cols={2}>
+  <Card title="CloudWatch Logs" icon="file-lines">
+    Application logs from ECS containers and Lambda functions
+  </Card>
+  <Card title="CloudWatch Metrics" icon="chart-line">
+    CPU, memory, request counts, and response times
+  </Card>
+  <Card title="CloudWatch Alarms" icon="bell">
+    10 automated alerts for critical issues
+  </Card>
+  <Card title="CloudWatch Dashboard" icon="gauge">
+    Visual overview of system health and performance
+  </Card>
+</CardGroup>
+
+## CloudWatch Log Groups
+
+Terraform creates two log groups with 14-day retention:
+
+### ECS Application Logs
+
+Log group: `/ecs/llmstxt-api`
+
+Contains:
+- FastAPI application logs
+- Crawling progress and results
+- Error messages and stack traces
+- HTTP request/response logs
+
+### Lambda Function Logs
+
+Log group: `/aws/lambda/llmstxt-auto-update`
+
+Contains:
+- Lambda execution logs
+- Cron trigger events
+- Recrawl endpoint responses
+- Errors and timeouts
+
+## View Logs
+
+### Via AWS Console
+
+<Steps>
+  <Step title="Open CloudWatch Console">
+    Navigate to [CloudWatch Console](https://console.aws.amazon.com/cloudwatch/)
+  </Step>
+  
+  <Step title="Access Log Groups">
+    1. Click **Logs** → **Log groups** in left sidebar
+    2. Select log group:
+       - `/ecs/llmstxt-api` for application logs
+       - `/aws/lambda/llmstxt-auto-update` for Lambda logs
+  </Step>
+  
+  <Step title="View Log Streams">
+    Each container/Lambda execution creates a separate log stream:
+    - **ECS**: `ecs/llmstxt-api/[task-id]`
+    - **Lambda**: `[date]/[execution-id]`
+    
+    Click a stream to view logs.
+  </Step>
+  
+  <Step title="Filter Logs">
+    Use the filter box to search:
+    ```
+    [ERROR]
+    ```
+    Or:
+    ```
+    "Failed to crawl"
+    ```
+  </Step>
+</Steps>
+
+### Via AWS CLI
+
+#### Tail ECS Logs (Live)
+
+```bash
+aws logs tail /ecs/llmstxt-api \
+  --follow \
+  --format short \
+  --region us-east-1
+```
+
+<Note>
+  Press `Ctrl+C` to stop tailing. `--follow` keeps the stream open for new logs.
+</Note>
+
+#### Tail Lambda Logs
+
+```bash
+aws logs tail /aws/lambda/llmstxt-auto-update \
+  --follow \
+  --format short \
+  --region us-east-1
+```
+
+#### Filter for Errors
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /ecs/llmstxt-api \
+  --filter-pattern "[ERROR]" \
+  --start-time $(date -u -d '1 hour ago' +%s)000 \
+  --region us-east-1
+```
+
+#### Get Recent Logs
+
+```bash
+# Last 100 lines
+aws logs tail /ecs/llmstxt-api \
+  --since 1h \
+  --region us-east-1
+
+# Last 5 minutes
+aws logs tail /ecs/llmstxt-api \
+  --since 5m \
+  --region us-east-1
+```
+
+## CloudWatch Metrics
+
+### Key Metrics
+
+The deployment tracks these critical metrics:
+
+<AccordionGroup>
+  <Accordion title="ECS Service Metrics">
+    - **CPUUtilization**: Percentage of allocated CPU used
+    - **MemoryUtilization**: Percentage of allocated memory used
+    - **RunningTaskCount**: Number of active containers
+    - **DesiredTaskCount**: Target number of containers
+  </Accordion>
+
+  <Accordion title="Application Load Balancer Metrics">
+    - **RequestCount**: Total HTTP requests
+    - **HTTPCode_Target_2XX_Count**: Successful responses
+    - **HTTPCode_Target_5XX_Count**: Server errors
+    - **TargetResponseTime**: Average response time in seconds
+    - **UnHealthyHostCount**: Number of failing targets
+    - **HealthyHostCount**: Number of healthy targets
+  </Accordion>
+
+  <Accordion title="Lambda Function Metrics">
+    - **Invocations**: Number of executions
+    - **Errors**: Failed executions
+    - **Duration**: Execution time in milliseconds
+    - **Throttles**: Rate-limited invocations
+  </Accordion>
+</AccordionGroup>
+
+### View Metrics in Console
+
+<Steps>
+  <Step title="Open CloudWatch Metrics">
+    CloudWatch Console → **Metrics** → **All metrics**
+  </Step>
+  
+  <Step title="Browse by Namespace">
+    - **AWS/ECS**: ECS service metrics
+    - **AWS/ApplicationELB**: Load balancer metrics
+    - **AWS/Lambda**: Lambda function metrics
+  </Step>
+  
+  <Step title="Select Metrics">
+    1. Choose namespace
+    2. Select dimension (e.g., Service/Cluster, LoadBalancer, Function)
+    3. Check metrics to graph
+  </Step>
+  
+  <Step title="Customize Graph">
+    - Change time range (1h, 3h, 12h, 1d, 1w)
+    - Adjust statistic (Average, Sum, Min, Max)
+    - Set refresh interval
+  </Step>
+</Steps>
+
+### View Metrics via CLI
+
+#### ECS CPU Utilization
+
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/ECS \
+  --metric-name CPUUtilization \
+  --dimensions Name=ServiceName,Value=llmstxt-api-service Name=ClusterName,Value=llmstxt-cluster \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 300 \
+  --statistics Average \
+  --region us-east-1
+```
+
+#### ALB Request Count
+
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/ApplicationELB \
+  --metric-name RequestCount \
+  --dimensions Name=LoadBalancer,Value=$(cd terraform && terraform output -raw alb_arn | cut -d: -f6) \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 300 \
+  --statistics Sum \
+  --region us-east-1
+```
+
+## CloudWatch Alarms
+
+Terraform configures 10 alarms to detect and alert on critical issues.
+
+### Configured Alarms
+
+| Alarm Name | Metric | Threshold | Description |
+|------------|--------|-----------|-------------|
+| `llmstxt-ecs-no-running-tasks` | RunningTaskCount | < 1 | ECS service has no active containers |
+| `llmstxt-alb-unhealthy-targets` | UnHealthyHostCount | ≥ 1 | ALB has unhealthy targets |
+| `llmstxt-alb-high-5xx-errors` | HTTPCode_Target_5XX | > 10 in 5 min | High server error rate |
+| `llmstxt-lambda-errors` | Lambda Errors | ≥ 1 | Lambda function errors |
+| `llmstxt-application-errors` | Custom log filter | > 5 in 5 min | Application ERROR logs |
+| `llmstxt-ecs-high-cpu` | CPUUtilization | > 80% for 15 min | High CPU usage |
+| `llmstxt-ecs-high-memory` | MemoryUtilization | > 85% for 15 min | High memory usage |
+| `llmstxt-alb-high-response-time` | TargetResponseTime | > 5s for 10 min | Slow response times |
+| `llmstxt-lambda-duration-high` | Lambda Duration | > 540s (9 min) | Lambda near timeout |
+| `llmstxt-lambda-throttles` | Lambda Throttles | ≥ 1 | Lambda rate limited |
+
+### View Alarm Status
+
+#### Via Console
+
+1. Go to CloudWatch Console → **Alarms** → **All alarms**
+2. Filter by prefix: `llmstxt-`
+3. Check alarm states:
+   - 🟢 **OK**: Normal operation
+   - 🔴 **ALARM**: Issue detected
+   - 🔵 **INSUFFICIENT_DATA**: Collecting data
+
+#### Via CLI
+
+```bash
+# List all alarms
+aws cloudwatch describe-alarms \
+  --alarm-name-prefix llmstxt- \
+  --region us-east-1
+
+# Get alarm state
+aws cloudwatch describe-alarms \
+  --alarm-names llmstxt-ecs-no-running-tasks \
+  --query 'MetricAlarms[0].StateValue' \
+  --output text \
+  --region us-east-1
+```
+
+### Email Notifications
+
+Alarms send notifications via Amazon SNS.
+
+<Steps>
+  <Step title="Confirm SNS Subscription">
+    After Terraform deployment, check your email for:
+    - **Subject**: "AWS Notification - Subscription Confirmation"
+    - **From**: `no-reply@sns.amazonaws.com`
+    
+    Click **"Confirm subscription"** link.
+  </Step>
+  
+  <Step title="Verify Subscription">
+    ```bash
+    aws sns list-subscriptions-by-topic \
+      --topic-arn $(cd terraform && terraform output -raw sns_topic_arn) \
+      --region us-east-1
+    ```
+    
+    Check `SubscriptionArn` is not `PendingConfirmation`.
+  </Step>
+  
+  <Step title="Receive Alerts">
+    When an alarm triggers, you'll receive email:
+    - **ALARM state**: Issue detected
+    - **OK state**: Issue resolved
+  </Step>
+</Steps>
+
+<Warning>
+  You won't receive alert emails until SNS subscription is confirmed!
+</Warning>
+
+### Add Additional Email Recipients
+
+```bash
+aws sns subscribe \
+  --topic-arn $(cd terraform && terraform output -raw sns_topic_arn) \
+  --protocol email \
+  --notification-endpoint another-email@example.com \
+  --region us-east-1
+```
+
+Recipient must confirm subscription via email.
+
+## CloudWatch Dashboard
+
+Terraform creates a dashboard named `llmstxt-overview` with key metrics.
+
+### Access Dashboard
+
+1. Go to CloudWatch Console → **Dashboards**
+2. Click `llmstxt-overview`
+
+### Dashboard Widgets
+
+<AccordionGroup>
+  <Accordion title="ECS Service - CPU & Memory">
+    - CPU utilization percentage (0-100%)
+    - Memory utilization percentage (0-100%)
+    - 5-minute intervals
+  </Accordion>
+
+  <Accordion title="ALB - Requests & Errors">
+    - Total request count
+    - 2xx success responses
+    - 5xx error responses
+    - 5-minute intervals
+  </Accordion>
+
+  <Accordion title="Lambda - Invocations & Errors">
+    - Total invocations
+    - Error count
+    - 1-hour intervals
+  </Accordion>
+
+  <Accordion title="Lambda - Duration">
+    - Average duration (ms)
+    - Maximum duration (ms)
+    - 1-hour intervals
+  </Accordion>
+</AccordionGroup>
+
+### Customize Dashboard
+
+Add custom widgets:
+
+1. Click **Actions** → **Add widget**
+2. Choose widget type (Line, Number, etc.)
+3. Select metrics
+4. Click **Create widget**
+5. Click **Save dashboard**
+
+## Application Error Log Filter
+
+Terraform creates a metric filter to count ERROR log entries.
+
+### View Error Metric
+
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace LLMsTxt/Application \
+  --metric-name ApplicationErrors \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 300 \
+  --statistics Sum \
+  --region us-east-1
+```
+
+### Modify Filter Pattern
+
+Edit `terraform/monitoring.tf`:
+
+```hcl
+resource "aws_cloudwatch_log_metric_filter" "ecs_application_errors" {
+  name           = "llmstxt-ecs-application-errors"
+  log_group_name = aws_cloudwatch_log_group.ecs_logs.name
+  pattern        = "[ERROR]"  # Change this pattern
+
+  metric_transformation {
+    name      = "ApplicationErrors"
+    namespace = "LLMsTxt/Application"
+    value     = "1"
+  }
+}
+```
+
+Apply changes:
+```bash
+cd terraform
+terraform apply
+```
+
+## Performance Monitoring
+
+### ECS Task Performance
+
+Monitor container resource usage:
+
+```bash
+# Get task ARN
+TASK_ARN=$(aws ecs list-tasks \
+  --cluster llmstxt-cluster \
+  --service-name llmstxt-api-service \
+  --query 'taskArns[0]' \
+  --output text \
+  --region us-east-1)
+
+# Get task metrics
+aws ecs describe-tasks \
+  --cluster llmstxt-cluster \
+  --tasks $TASK_ARN \
+  --query 'tasks[0].containers[0].{CPU:cpu,Memory:memory,MemoryReservation:memoryReservation}' \
+  --region us-east-1
+```
+
+### ALB Performance
+
+Check response times and throughput:
+
+```bash
+# Average response time (last hour)
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/ApplicationELB \
+  --metric-name TargetResponseTime \
+  --dimensions Name=LoadBalancer,Value=... \
+  --start-time $(date -u -d '1 hour ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 300 \
+  --statistics Average Maximum \
+  --region us-east-1
+```
+
+## Log Retention
+
+By default, logs are retained for 14 days.
+
+### Change Retention Period
+
+Edit `terraform/main.tf` and `terraform/ecs.tf`:
+
+```hcl
+resource "aws_cloudwatch_log_group" "ecs_logs" {
+  name              = "/ecs/llmstxt-api"
+  retention_in_days = 30  # Change from 14 to 30 days
+}
+
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  name              = "/aws/lambda/llmstxt-auto-update"
+  retention_in_days = 30  # Change from 14 to 30 days
+}
+```
+
+Apply changes:
+```bash
+cd terraform
+terraform apply
+```
+
+<Note>
+  Longer retention increases CloudWatch Logs costs. 14 days is recommended for production.
+</Note>
+
+## Troubleshooting with Logs
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="High 5xx error rate">
+    **Check application logs for errors:**
+    ```bash
+    aws logs filter-log-events \
+      --log-group-name /ecs/llmstxt-api \
+      --filter-pattern "[ERROR]" \
+      --start-time $(date -u -d '1 hour ago' +%s)000
+    ```
+
+    Common causes:
+    - Database connection failures (Supabase)
+    - R2 storage authentication errors
+    - Invalid environment variables
+  </Accordion>
+
+  <Accordion title="ECS task keeps restarting">
+    **Check stopped task reason:**
+    ```bash
+    aws ecs describe-tasks \
+      --cluster llmstxt-cluster \
+      --tasks $TASK_ARN \
+      --query 'tasks[0].stoppedReason'
+    ```
+
+    Then check logs for the stopped task.
+  </Accordion>
+
+  <Accordion title="Lambda timeouts">
+    **Check Lambda duration metric:**
+    ```bash
+    aws cloudwatch get-metric-statistics \
+      --namespace AWS/Lambda \
+      --metric-name Duration \
+      --dimensions Name=FunctionName,Value=llmstxt-auto-update \
+      --start-time $(date -u -d '6 hours ago' --iso-8601=seconds) \
+      --end-time $(date -u --iso-8601=seconds) \
+      --period 3600 \
+      --statistics Maximum Average
+    ```
+
+    If consistently near 600000ms (10 min), increase timeout in `terraform/main.tf`.
+  </Accordion>
+</AccordionGroup>
+
+## Cost Optimization
+
+### Reduce Log Costs
+
+- Decrease retention period (7 days instead of 14)
+- Reduce log verbosity in application
+- Use log sampling for high-volume debug logs
+
+### Monitor CloudWatch Costs
+
+```bash
+# Get CloudWatch Logs usage
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Logs \
+  --metric-name IncomingBytes \
+  --start-time $(date -u -d '1 month ago' --iso-8601=seconds) \
+  --end-time $(date -u --iso-8601=seconds) \
+  --period 2592000 \
+  --statistics Sum \
+  --region us-east-1
+```
+
+CloudWatch Logs pricing: ~$0.50 per GB ingested, $0.03 per GB stored.
+
+## Summary
+
+<Check>
+  You now have comprehensive monitoring with:
+  - Real-time logs accessible via Console and CLI
+  - 10 CloudWatch alarms for critical issues
+  - Email notifications via SNS
+  - Visual dashboard for system health
+  - Metric tracking for performance analysis
+</Check>
+
+<Card title="Complete Deployment" icon="check">
+  Your llms.txt Generator is fully deployed and monitored! Return to the [Deployment Overview](/deployment/overview) for next steps.
+</Card>

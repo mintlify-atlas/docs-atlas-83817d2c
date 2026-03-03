@@ -1,0 +1,404 @@
+---
+title: 'Formatter'
+description: 'Format crawled pages into llms.txt markdown format'
+icon: 'file-lines'
+---
+
+The formatter module converts crawled page data into the llms.txt markdown format. It handles URL cleaning, markdown file detection, content organization by sections, and automatic tagging.
+
+## Overview
+
+The formatter takes a list of `PageInfo` objects and generates a structured markdown file following the llms.txt specification:
+
+- Site title and summary from homepage
+- Pages organized by URL path sections
+- Optional markdown file linking (`.md` variants)
+- Automatic content tagging
+- Primary/secondary content separation
+
+## Core Functions
+
+### format_llms_txt()
+
+Generates the complete llms.txt formatted output.
+
+```python
+def format_llms_txt(
+    base_url: str,
+    pages: list[PageInfo],
+    md_url_map: Dict[str, str] = None
+) -> str
+```
+
+<ParamField path="base_url" type="str" required>
+  The base URL of the crawled site
+</ParamField>
+
+<ParamField path="pages" type="list[PageInfo]" required>
+  List of crawled pages (first page should be homepage)
+</ParamField>
+
+<ParamField path="md_url_map" type="Dict[str, str]" default="None">
+  Optional mapping from HTML URLs to markdown URLs
+</ParamField>
+
+<ResponseField name="output" type="str">
+  Formatted llms.txt content as a string
+</ResponseField>
+
+**Output Format:**
+
+```markdown
+# Site Title
+
+> Site summary from homepage
+
+## Section Name
+
+- [Page Title](url): Description with tags
+- [Another Page](url): Description
+
+## Optional
+
+- [Privacy Policy](url): Privacy information
+- [Terms of Service](url): Legal terms
+```
+
+## URL Processing
+
+### clean_url()
+
+Removes query parameters and fragments from URLs.
+
+```python
+def clean_url(url: str) -> str
+```
+
+<ParamField path="url" type="str" required>
+  URL to clean
+</ParamField>
+
+<ResponseField name="clean_url" type="str">
+  URL with only scheme, netloc, and path
+</ResponseField>
+
+**Example:**
+
+```python
+clean_url("https://example.com/docs?v=2#section")
+# Returns: "https://example.com/docs"
+```
+
+### get_md_url()
+
+Converts an HTML URL to its potential markdown equivalent.
+
+```python
+def get_md_url(url: str) -> str
+```
+
+<ParamField path="url" type="str" required>
+  Original URL
+</ParamField>
+
+<ResponseField name="md_url" type="str">
+  Converted markdown URL path
+</ResponseField>
+
+**Conversion Rules:**
+
+- `page.html` → `page.html.md`
+- `/docs/` → `/docs/index.html.md`
+- `/about` → `/about.md`
+
+**Example:**
+
+```python
+get_md_url("https://example.com/docs/")
+# Returns: "https://example.com/docs/index.html.md"
+
+get_md_url("https://example.com/guide.html")
+# Returns: "https://example.com/guide.html.md"
+```
+
+### check_md_exists()
+
+Checks if a markdown version of a URL exists.
+
+```python
+async def check_md_exists(url: str, timeout: float = 5.0) -> bool
+```
+
+<ParamField path="url" type="str" required>
+  URL to check
+</ParamField>
+
+<ParamField path="timeout" type="float" default="5.0">
+  Request timeout in seconds
+</ParamField>
+
+<ResponseField name="exists" type="bool">
+  True if markdown version returns 200
+</ResponseField>
+
+### get_md_url_map()
+
+Builds a mapping of HTML to markdown URLs for all pages.
+
+```python
+async def get_md_url_map(pages: list[PageInfo]) -> Dict[str, str]
+```
+
+<ParamField path="pages" type="list[PageInfo]" required>
+  List of pages to check
+</ParamField>
+
+<ResponseField name="md_map" type="Dict[str, str]">
+  Mapping from clean HTML URLs to markdown URLs (or original if no .md found)
+</ResponseField>
+
+**Behavior:**
+
+- Sends HEAD requests concurrently for all pages
+- Checks for markdown content types
+- Falls back to original URL if no markdown exists
+- Uses asyncio.gather for parallel requests
+
+## Text Processing
+
+### truncate()
+
+Truncates text to specified length with ellipsis.
+
+```python
+def truncate(text: str, length: int = 150) -> str
+```
+
+<ParamField path="text" type="str" required>
+  Text to truncate
+</ParamField>
+
+<ParamField path="length" type="int" default="150">
+  Maximum character length
+</ParamField>
+
+<ResponseField name="truncated" type="str">
+  Text truncated with "..." if exceeded length, otherwise original
+</ResponseField>
+
+### get_site_title()
+
+Extracts site title from homepage, with fallback to domain name.
+
+```python
+def get_site_title(homepage: PageInfo, base_url: str) -> str
+```
+
+<ParamField path="homepage" type="PageInfo" required>
+  Homepage page info
+</ParamField>
+
+<ParamField path="base_url" type="str" required>
+  Site base URL
+</ParamField>
+
+<ResponseField name="title" type="str">
+  Site title (max 80 chars)
+</ResponseField>
+
+**Logic:**
+
+- Uses homepage title if meaningful
+- Falls back to cleaned domain name for generic titles ("Home", "Welcome", "Index")
+- Truncated to 80 characters
+
+### get_summary()
+
+Extracts site summary from homepage.
+
+```python
+def get_summary(homepage: PageInfo) -> str
+```
+
+<ParamField path="homepage" type="PageInfo" required>
+  Homepage page info
+</ParamField>
+
+<ResponseField name="summary" type="str">
+  Site summary (max 200 chars)
+</ResponseField>
+
+**Precedence:**
+
+1. Homepage description
+2. Homepage snippet
+3. "No description available"
+
+## Section Processing
+
+### clean_section_name()
+
+Cleanlifies section names for display.
+
+```python
+def clean_section_name(name: str) -> str
+```
+
+<ParamField path="name" type="str" required>
+  Raw section name from URL path
+</ParamField>
+
+<ResponseField name="clean_name" type="str">
+  Capitalized, human-readable section name
+</ResponseField>
+
+**Transformations:**
+
+- Replaces hyphens and underscores with spaces
+- Capitalizes words
+- Uppercases known abbreviations (API, REST, GraphQL, SDK, CLI, UI, UX, FAQ, RSS)
+- Defaults to "Main" for empty names
+
+**Examples:**
+
+```python
+clean_section_name("api-reference")
+# Returns: "API Reference"
+
+clean_section_name("getting_started")
+# Returns: "Getting Started"
+
+clean_section_name("")
+# Returns: "Main"
+```
+
+### is_secondary_section()
+
+Determines if a section is secondary/optional content.
+
+```python
+def is_secondary_section(section_name: str) -> bool
+```
+
+<ParamField path="section_name" type="str" required>
+  Section name to check
+</ParamField>
+
+<ResponseField name="is_secondary" type="bool">
+  True if section matches secondary patterns
+</ResponseField>
+
+**Secondary Patterns:**
+
+- Legal: privacy, terms, legal, cookie, disclaimer
+- Meta: sitemap, changelog, release
+- Community: contributing, code-of-conduct, governance, license
+- Company: about, team, career, job, contact, company
+- Social: twitter, github, linkedin, facebook, social
+- Archive: archive, old, legacy, deprecated
+
+## Usage Examples
+
+### Basic Formatting
+
+```python
+from backend.formatter import format_llms_txt
+from backend.crawler import PageInfo
+
+pages = [
+    PageInfo(
+        url="https://example.com",
+        title="Example Site",
+        description="A great example site",
+        snippet="Welcome to our example site..."
+    ),
+    PageInfo(
+        url="https://example.com/docs/intro",
+        title="Introduction",
+        description="Getting started guide",
+        snippet="Learn the basics..."
+    ),
+    PageInfo(
+        url="https://example.com/api/reference",
+        title="API Reference",
+        description="Complete API documentation",
+        snippet="API endpoints..."
+    )
+]
+
+output = format_llms_txt("https://example.com", pages)
+print(output)
+```
+
+**Output:**
+
+```markdown
+# Example Site
+
+> A great example site
+
+## Docs
+
+- [Introduction](https://example.com/docs/intro): Getting started guide
+
+## API
+
+- [API Reference](https://example.com/api/reference): Complete API documentation
+```
+
+### With Markdown URL Mapping
+
+```python
+from backend.formatter import format_llms_txt, get_md_url_map
+
+pages = await crawler.run()
+md_url_map = await get_md_url_map(pages)
+
+output = format_llms_txt(
+    base_url="https://docs.example.com",
+    pages=pages,
+    md_url_map=md_url_map
+)
+
+# Links will point to .md files where available
+```
+
+### Section Organization
+
+```python
+pages = [
+    PageInfo(url="https://ex.com", title="Home", description="Main", snippet="..."),
+    PageInfo(url="https://ex.com/docs/guide", title="Guide", description="Guide", snippet="..."),
+    PageInfo(url="https://ex.com/api/auth", title="Auth", description="Auth", snippet="..."),
+    PageInfo(url="https://ex.com/privacy", title="Privacy", description="Privacy", snippet="..."),
+]
+
+output = format_llms_txt("https://ex.com", pages)
+
+# Output has primary sections (Docs, API) followed by:
+# ## Optional
+# - [Privacy](https://ex.com/privacy): Privacy
+```
+
+## Content Tagging
+
+The formatter integrates with the `tagger` module:
+
+```python
+from tagger import assign_tags, format_description_with_tags
+
+tags = assign_tags(page, section_name=section)
+desc_with_tags = format_description_with_tags(desc, tags)
+```
+
+Tags appear inline in descriptions:
+
+```markdown
+- [API Auth](url): Authentication endpoints #api #auth
+```
+
+## Related Modules
+
+- **crawler** - Provides `PageInfo` objects
+- **tagger** - Assigns and formats content tags
+- **storage** - Saves formatted output to R2

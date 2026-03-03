@@ -1,0 +1,290 @@
+---
+title: Using the Web Interface
+description: Learn how to generate llms.txt files using the web-based user interface
+icon: browser
+---
+
+The llms.txt Generator provides an intuitive web interface for generating and managing your llms.txt files. This guide walks through all the features available in the UI.
+
+## Accessing the Web Interface
+
+The web interface is available at:
+- **Production**: https://llmstxt.vercel.app/
+- **Local Development**: http://localhost:3000
+
+## Generating Your First llms.txt
+
+<Steps>
+  <Step title="Enter the target URL">
+    In the URL input field, enter the website you want to generate an llms.txt file for.
+    
+    ```
+    https://example.com
+    ```
+    
+    <Note>
+      The URL should include the protocol (http:// or https://) and should be the base URL of the site you want to crawl.
+    </Note>
+  </Step>
+
+  <Step title="Configure crawl parameters">
+    Adjust the settings based on your needs:
+    
+    **Max Pages**: Number of pages to crawl (default: 50)
+    - Lower values for faster generation
+    - Higher values (up to 200) for comprehensive coverage
+    
+    **Description Length**: Character limit for page excerpts (default: 500)
+    - Shorter for concise summaries
+    - Longer for detailed descriptions
+  </Step>
+
+  <Step title="Enable optional features">
+    Toggle advanced features as needed:
+    
+    <AccordionGroup>
+      <Accordion title="Auto-Update (Recommended)">
+        Enable scheduled recrawls to keep your llms.txt file synchronized with website changes.
+        
+        - **Recrawl Interval**: Time between updates in minutes (default: 10080 = 7 days)
+        - Useful for documentation sites that update frequently
+        - Powered by AWS Lambda + EventBridge
+        
+        <Warning>
+          Auto-update requires backend infrastructure with Supabase and R2 storage configured.
+        </Warning>
+      </Accordion>
+      
+      <Accordion title="LLM Enhancement">
+        Use AI (Grok 4.1-Fast) to improve content quality and formatting.
+        
+        - Optimizes descriptions for better LLM understanding
+        - Adds contextual improvements
+        - Requires `OPENROUTER_API_KEY` configured
+        
+        <Info>
+          This feature must be explicitly enabled in the backend configuration with `LLM_ENHANCEMENT_ENABLED=true`.
+        </Info>
+      </Accordion>
+      
+      <Accordion title="Use Brightdata">
+        Enable Brightdata proxy for JavaScript-heavy websites.
+        
+        - Handles dynamic content loaded via JavaScript
+        - Uses Playwright browser automation
+        - Requires Brightdata API credentials
+        
+        <Tip>
+          Enable this for modern SPAs (React, Vue, Angular) or sites with client-side rendering.
+        </Tip>
+      </Accordion>
+    </AccordionGroup>
+  </Step>
+
+  <Step title="Start the generation">
+    Click the **Generate llms.txt** button to begin crawling.
+    
+    The interface will display real-time progress updates as pages are discovered and processed.
+  </Step>
+</Steps>
+
+## Understanding the Output
+
+### Real-time Logs
+
+As the crawler runs, you'll see logs showing:
+
+<CodeGroup>
+```text Connection
+Connecting to crawler...
+Starting crawl of https://example.com...
+```
+
+```text Crawling Progress
+Discovered sitemap at /sitemap.xml
+Crawling page 1/50: Home
+Crawling page 2/50: Documentation
+Crawling page 3/50: API Reference
+...
+```
+
+```text Processing
+Checking for .md versions of pages...
+Found 15 pages with .md versions
+Enhancing with LLM...
+LLM enhancement: improved 42 descriptions
+```
+
+```text Completion
+Saved to R2: https://pub-xxx.r2.dev/example-com-abc123.txt
+Auto-update enabled for this site
+```
+</CodeGroup>
+
+### Generated Output
+
+Once complete, you'll see the formatted llms.txt content in the results panel:
+
+```markdown Example Output
+# Example Site
+
+> A comprehensive platform for building modern web applications with best practices and tools.
+
+## Documentation
+
+- [Getting Started](https://example.com/docs/getting-started): Learn the basics and set up your first project [Quickstart] [Beginner]
+- [API Reference](https://example.com/docs/api): Complete API documentation with examples [API] [Reference]
+- [Advanced Guides](https://example.com/docs/advanced): In-depth tutorials for complex scenarios [Guide] [Advanced]
+
+## Optional
+
+- [Privacy Policy](https://example.com/privacy)
+- [Terms of Service](https://example.com/terms)
+```
+
+<Info>
+  Content tags like `[API]`, `[Guide]`, `[Quickstart]` are automatically added based on page content analysis.
+</Info>
+
+### Hosted URL
+
+If R2 storage is configured, you'll receive a public CDN URL:
+
+```
+https://pub-abc123.r2.dev/example-com-xyz789.txt
+```
+
+This URL can be:
+- Linked from your website's footer or documentation
+- Submitted to llms.txt directories
+- Used as a reference for LLM indexing
+
+## Working with Results
+
+### Copy to Clipboard
+
+Click the **Copy** button to copy the entire llms.txt content to your clipboard for pasting elsewhere.
+
+### Download File
+
+Click the **Download** button to save the llms.txt file to your local machine.
+
+<Tip>
+  The filename will be `llms.txt` - you can upload this directly to your website's root directory.
+</Tip>
+
+### View in Browser
+
+If a hosted URL was generated, click **View Hosted Version** to open the public CDN link in a new tab.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Small" icon="seedling">
+    Begin with 25-50 pages to test the output quality before scaling up to larger crawls.
+  </Card>
+  
+  <Card title="Review Output" icon="magnifying-glass">
+    Always review the generated llms.txt to ensure it accurately represents your site structure.
+  </Card>
+  
+  <Card title="Enable Auto-Update" icon="arrows-rotate">
+    Set up scheduled recrawls for documentation sites that update frequently (weekly or monthly).
+  </Card>
+  
+  <Card title="Use .md Links" icon="markdown">
+    The generator automatically prefers .md versions of pages when available for better LLM parsing.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection error - is backend running?">
+    This error means the WebSocket connection to the backend failed.
+    
+    **Solutions:**
+    - Verify the backend is running at the configured URL
+    - Check `NEXT_PUBLIC_WS_URL` in frontend environment variables
+    - Ensure CORS origins include your frontend domain
+    - Check firewall/network settings
+  </Accordion>
+  
+  <Accordion title="Failed to authenticate">
+    Token generation failed during the authentication step.
+    
+    **Solutions:**
+    - Verify `API_KEY` is set in backend `.env`
+    - Check that the frontend can reach the `/api/auth/token` endpoint
+    - Review backend logs for authentication errors
+  </Accordion>
+  
+  <Accordion title="No pages found">
+    The crawler couldn't discover any pages on the target site.
+    
+    **Solutions:**
+    - Verify the URL is accessible and returns a valid HTML page
+    - Enable Brightdata if the site requires JavaScript
+    - Check if the site blocks automated crawlers (User-Agent)
+    - Try a different starting URL (e.g., /docs instead of root)
+  </Accordion>
+  
+  <Accordion title="Crawl stops unexpectedly">
+    The WebSocket connection was closed before completion.
+    
+    **Solutions:**
+    - Check backend logs for errors or timeouts
+    - Reduce `maxPages` to avoid long-running operations
+    - Verify network stability between frontend and backend
+    - Check if the backend container has sufficient memory
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Features
+
+### Webhook Integration
+
+When auto-update is enabled, you can trigger immediate recrawls using webhooks:
+
+```bash cURL Example
+curl -X POST https://your-backend.com/internal/hooks/site-changed \
+  -H "Content-Type: application/json" \
+  -d '{
+    "base_url": "https://example.com",
+    "webhook_secret": "your-secret-token"
+  }'
+```
+
+This is useful for CI/CD pipelines that want to update llms.txt immediately after documentation deploys.
+
+### Sentinel URLs
+
+The crawler automatically detects sitemap URLs as "sentinel" URLs for change detection:
+
+- Checks `/sitemap.xml` and `/sitemap_index.xml`
+- Uses Last-Modified headers to detect changes
+- Triggers recrawls only when content has changed
+
+<Check>
+  This ensures efficient recrawling by avoiding unnecessary regeneration when content hasn't changed.
+</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Usage" icon="code" href="/guides/api-usage">
+    Learn how to integrate programmatically with the WebSocket API
+  </Card>
+  
+  <Card title="Configuration" icon="sliders" href="/guides/configuration">
+    Explore all environment variables and configuration options
+  </Card>
+  
+  <Card title="llms.txt Spec" icon="file-lines" href="/guides/llmstxt-spec">
+    Understand the llms.txt specification and formatting
+  </Card>
+  
+  <Card title="Development" icon="code-branch" href="/development">
+    Set up a local development environment
+  </Card>
+</CardGroup>

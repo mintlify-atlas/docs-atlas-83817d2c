@@ -1,0 +1,310 @@
+---
+title: 'WebSocket Crawl Endpoint'
+description: 'Real-time website crawling via WebSocket connection'
+---
+
+## Overview
+
+The WebSocket endpoint provides real-time bidirectional communication for crawling websites and generating `llms.txt` files. It streams progress updates, logs, and results as the crawl happens.
+
+## Endpoint
+
+```
+WS /ws/crawl
+```
+
+## Authentication
+
+The endpoint supports two authentication methods:
+
+### Method 1: JWT Token (Recommended)
+
+Obtain a short-lived JWT token from the `/auth/token` endpoint and pass it as a query parameter:
+
+```
+ws://your-backend.com/ws/crawl?token=YOUR_JWT_TOKEN
+```
+
+### Method 2: API Key
+
+Pass your API key directly as a query parameter:
+
+```
+ws://your-backend.com/ws/crawl?api_key=YOUR_API_KEY
+```
+
+<Warning>
+API keys are long-lived credentials. For production use, prefer JWT tokens which expire after 5 minutes.
+</Warning>
+
+## Request Format
+
+After connecting, send a JSON payload with the crawl configuration:
+
+<ParamField body="url" type="string" required>
+  The base URL of the website to crawl. Must be a valid HTTP/HTTPS URL.
+  
+  Example: `"https://example.com"`
+</ParamField>
+
+<ParamField body="maxPages" type="integer" default={50}>
+  Maximum number of pages to crawl. Used to prevent excessive crawling.
+  
+  Range: 1-1000
+</ParamField>
+
+<ParamField body="descLength" type="integer" default={500}>
+  Maximum length of description excerpts in characters. Truncated at semantic boundaries.
+  
+  Range: 100-2000
+</ParamField>
+
+<ParamField body="enableAutoUpdate" type="boolean" default={false}>
+  Enable automatic periodic recrawls for this site. Stores site metadata in the database.
+</ParamField>
+
+<ParamField body="recrawlIntervalMinutes" type="integer" default={10080}>
+  Minutes between automatic recrawls (default: 7 days). Only used if `enableAutoUpdate` is true.
+  
+  Common values:
+  - 360 (6 hours)
+  - 1440 (1 day)
+  - 10080 (1 week)
+</ParamField>
+
+<ParamField body="llmEnhance" type="boolean" default={false}>
+  Use AI (Grok 4.1-Fast) to enhance and optimize the generated `llms.txt` content. Requires `OPENROUTER_API_KEY` and `LLM_ENHANCEMENT_ENABLED=true`.
+</ParamField>
+
+<ParamField body="useBrightdata" type="boolean" default={true}>
+  Use Brightdata's Scraping Browser for JavaScript-heavy sites. Falls back to Playwright if unavailable.
+</ParamField>
+
+### Example Request
+
+```json
+{
+  "url": "https://docs.example.com",
+  "maxPages": 100,
+  "descLength": 600,
+  "enableAutoUpdate": true,
+  "recrawlIntervalMinutes": 1440,
+  "llmEnhance": false,
+  "useBrightdata": true
+}
+```
+
+## Response Format
+
+The server sends JSON messages with different types throughout the crawl process:
+
+### Log Messages
+
+<ResponseField name="type" type="string">
+  Always `"log"` for progress updates
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Human-readable log message describing the current operation
+</ResponseField>
+
+```json
+{
+  "type": "log",
+  "content": "Crawling page 5/100..."
+}
+```
+
+### Result Message
+
+<ResponseField name="type" type="string">
+  Always `"result"` for the generated llms.txt content
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  The complete generated `llms.txt` file in Markdown format
+</ResponseField>
+
+```json
+{
+  "type": "result",
+  "content": "# Example Documentation\n\n> https://docs.example.com\n\n## Getting Started\n\n> https://docs.example.com/start\n\nLearn how to..."
+}
+```
+
+### URL Message
+
+<ResponseField name="type" type="string">
+  Always `"url"` for the hosted file URL
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Public CDN URL where the `llms.txt` file is hosted (Cloudflare R2)
+</ResponseField>
+
+```json
+{
+  "type": "url",
+  "content": "https://pub-abc123.r2.dev/llms/example-com.txt"
+}
+```
+
+### Error Message
+
+<ResponseField name="type" type="string">
+  Always `"error"` for error conditions
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Error description
+</ResponseField>
+
+```json
+{
+  "type": "error",
+  "content": "Failed to fetch page: Connection timeout"
+}
+```
+
+## Connection Flow
+
+1. **Connect**: Open WebSocket with authentication parameter
+2. **Authenticate**: Server validates token/API key
+3. **Send Request**: Client sends crawl configuration JSON
+4. **Receive Logs**: Server streams progress updates in real-time
+5. **Receive Result**: Server sends complete `llms.txt` content
+6. **Receive URL**: Server sends hosted file URL (if R2 configured)
+7. **Close**: Connection closes automatically after completion
+
+## Error Handling
+
+### Authentication Errors
+
+**Invalid Token**
+```
+WebSocket closed with code 1008: Invalid or expired token
+```
+
+**Missing API Key**
+```
+WebSocket closed with code 1008: Unauthorized
+```
+
+### Runtime Errors
+
+Runtime errors are sent as JSON error messages before the connection closes:
+
+```json
+{
+  "type": "error",
+  "content": "Invalid URL format"
+}
+```
+
+Common error messages:
+- `"Invalid URL format"`
+- `"Failed to fetch page: [details]"`
+- `"Crawl timeout exceeded"`
+- `"Maximum pages limit reached"`
+
+## Example Implementation
+
+### JavaScript/TypeScript
+
+```typescript
+const ws = new WebSocket('wss://api.example.com/ws/crawl?token=YOUR_TOKEN');
+
+ws.onopen = () => {
+  // Send crawl request
+  ws.send(JSON.stringify({
+    url: 'https://docs.example.com',
+    maxPages: 50,
+    descLength: 500,
+    enableAutoUpdate: false
+  }));
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  
+  switch (message.type) {
+    case 'log':
+      console.log('Progress:', message.content);
+      break;
+    case 'result':
+      console.log('Generated llms.txt:', message.content);
+      break;
+    case 'url':
+      console.log('Hosted at:', message.content);
+      break;
+    case 'error':
+      console.error('Error:', message.content);
+      break;
+  }
+};
+
+ws.onerror = (error) => {
+  console.error('WebSocket error:', error);
+};
+
+ws.onclose = (event) => {
+  console.log('Connection closed:', event.code, event.reason);
+};
+```
+
+### Python
+
+```python
+import asyncio
+import websockets
+import json
+
+async def crawl_site():
+    uri = "wss://api.example.com/ws/crawl?token=YOUR_TOKEN"
+    
+    async with websockets.connect(uri) as websocket:
+        # Send crawl request
+        await websocket.send(json.dumps({
+            "url": "https://docs.example.com",
+            "maxPages": 50,
+            "descLength": 500,
+            "enableAutoUpdate": False
+        }))
+        
+        # Receive messages
+        async for message in websocket:
+            data = json.loads(message)
+            
+            if data["type"] == "log":
+                print(f"Progress: {data['content']}")
+            elif data["type"] == "result":
+                print(f"Generated: {data['content'][:100]}...")
+            elif data["type"] == "url":
+                print(f"Hosted at: {data['content']}")
+            elif data["type"] == "error":
+                print(f"Error: {data['content']}")
+
+asyncio.run(crawl_site())
+```
+
+## Rate Limits
+
+- No explicit rate limits on the WebSocket endpoint
+- Crawling is limited by `maxPages` parameter
+- Consider backend resource usage when setting high `maxPages` values
+- Use `enableAutoUpdate` to avoid manual repeated crawls
+
+## Best Practices
+
+1. **Use JWT tokens** instead of API keys for better security
+2. **Set reasonable `maxPages`** limits (50-100 for most sites)
+3. **Enable auto-update** for sites that change frequently
+4. **Handle all message types** in your client code
+5. **Implement reconnection logic** for production use
+6. **Validate URLs** before sending to prevent errors
+7. **Use Brightdata** (`useBrightdata: true`) for JavaScript-heavy sites
+
+## Related Endpoints
+
+- [Authentication](/api/authentication) - Obtain JWT tokens
+- [Webhooks](/api/webhooks) - Trigger recrawls via webhook

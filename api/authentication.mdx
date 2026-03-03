@@ -248,6 +248,70 @@ The token generation is implemented in `/backend/jwt_auth.py:8-14`:
 
 Token validation happens in `/backend/jwt_auth.py:16-23` and is called by the WebSocket endpoint at `/backend/main.py:94`.
 
+## Health Check Endpoint
+
+A simple health check endpoint for monitoring the API status.
+
+### Endpoint
+
+```
+GET /health
+```
+
+### Authentication
+
+No authentication required.
+
+### Response
+
+<ResponseField name="status" type="string">
+  Always returns `"ok"` when the API is operational.
+</ResponseField>
+
+### Example Request
+
+```bash
+curl https://api.example.com/health
+```
+
+```javascript
+const response = await fetch('https://api.example.com/health');
+const data = await response.json();
+console.log(data); // { "status": "ok" }
+```
+
+```python
+import httpx
+
+response = httpx.get("https://api.example.com/health")
+print(response.json())  # {"status": "ok"}
+```
+
+### Response Example
+
+```json
+{
+  "status": "ok"
+}
+```
+
+### Use Cases
+
+- **Kubernetes/ECS health checks**: Use as a liveness probe
+- **Load balancer health checks**: Configure ALB to ping this endpoint
+- **Monitoring**: Set up uptime monitoring services
+- **CI/CD validation**: Verify deployment succeeded
+
+### Implementation
+
+Implemented in `/backend/main.py:25-27`:
+
+```python
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+```
+
 ## Related Endpoints
 
 - [WebSocket Crawl](/api/websocket) - Use tokens to authenticate WebSocket connections
